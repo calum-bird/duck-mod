@@ -98,11 +98,14 @@ def rollout(
     model = mujoco.MjModel.from_xml_path(str(xml))
     condition_model(model)
     data = mujoco.MjData(model)
-    # Start from the STAND keyframe when the scene defines one — otherwise the
-    # duck begins collapsed at the origin and the first second of every rollout
-    # measures it falling over rather than dancing.
-    if model.nkey > 0:
-        mujoco.mj_resetDataKeyframe(model, data, 0)
+    # Start from the STAND keyframe, found BY NAME. Keyframe 0 in scene.xml is
+    # "INIT" — every joint at zero, legs straight — a pose this policy never
+    # saw and cannot recover from (fall recovery is a different task). One
+    # `mj_resetDataKeyframe(model, data, 0)` quietly turned every eval into
+    # "dropped from an alien pose, graded on the aftermath".
+    key = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_KEY, "STAND")
+    if key >= 0:
+        mujoco.mj_resetDataKeyframe(model, data, key)
     mujoco.mj_forward(model, data)
 
     control_dt = DECIMATION * model.opt.timestep

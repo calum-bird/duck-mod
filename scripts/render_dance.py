@@ -54,8 +54,9 @@ def main() -> int:
     model = mujoco.MjModel.from_xml_path(str(root / MICRODUCK_SCENE))
     condition_model(model)
     data = mujoco.MjData(model)
-    if model.nkey > 0:
-        mujoco.mj_resetDataKeyframe(model, data, 0)
+    key = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_KEY, "STAND")
+    if key >= 0:
+        mujoco.mj_resetDataKeyframe(model, data, key)
     mujoco.mj_forward(model, data)
 
     control_dt = DECIMATION * model.opt.timestep
