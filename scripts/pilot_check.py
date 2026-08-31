@@ -83,8 +83,15 @@ def main() -> int:
                    help="refuse to judge before this many logged iterations")
     p.add_argument("--objective", default="beat_bob",
                    help="the stage-1 positive term that must be rising")
+    p.add_argument("--objective-floor", type=float, default=0.25,
+                   help="a plateaued objective already at or above this value "
+                        "is a term near its working range, not a failure -- "
+                        "beat_bob_power's cycle-mean ceiling is ~0.5, so a run "
+                        "that OPENS near 0.47 cannot rise and should not die "
+                        "for it (the mistake that killed a healthy run 2)")
     args = p.parse_args()
 
+    hard_warns: list[str] = []
     series = parse(args.log)
     if not series:
         print("VERDICT: UNKNOWN — no metrics parsed yet (is the run past setup?)")
@@ -109,25 +116,34 @@ def main() -> int:
         if max(values) > 0:
             fails.append(f"{key} fired ({max(values):.2f}) — physics diverged")
 
-    # --- WARN: the stage-1 objective must be climbing ------------------------
-    obj = find(series, args.objective)
+    # --- WARN: the stage-1 objective must be climbing OR already earning -----
+    # Only reward series count as objectives: the substring match once caught
+    # Curriculum/* weight schedules, which are constant BY DESIGN, and flagged
+    # their flatness as failure.
+    obj = {k: v for k, v in find(series, args.objective).items()
+           if k.startswith("Episode_Reward/")}
     if not obj:
         warns.append(f"no series matching '{args.objective}' — is it weighted 0?")
     for key, values in obj.items():
         first, last = trend(values)
         notes.append(f"{key}: {first:.3f} -> {last:.3f}")
         if last <= first * 1.02:
-            warns.append(f"{key} has PLATEAUED ({first:.3f} -> {last:.3f}) — the "
-                         f"primary objective has stopped improving. If it is also "
-                         f"far from its 1.0 ceiling, the term is probably "
-                         f"satisfiable without doing the task.")
+            if last >= args.objective_floor:
+                notes.append(f"  ({key} flat but already at {last:.3f} — "
+                             f"earning, not stuck)")
+            else:
+                warns.append(f"{key} has PLATEAUED low ({first:.3f} -> {last:.3f}) "
+                             f"— stopped improving while far from its ceiling; "
+                             f"probably satisfiable without doing the task")
 
     # --- WARN: falls should be decreasing ------------------------------------
     for key, values in find(series, "fell_over").items():
         first, last = trend(values)
         notes.append(f"{key}: {first:.2f} -> {last:.2f}")
-        if last > first:
-            warns.append(f"{key} rising ({first:.2f} -> {last:.2f}) — losing stability")
+        # >10% relative: a 3% wobble between windows is sampling noise, and a
+        # gate that kills on noise costs a real run each time it fires.
+        if last > first * 1.10:
+            hard_warns.append(f"{key} rising ({first:.2f} -> {last:.2f}) — losing stability")
 
     # --- WARN: the duck is moving LESS over time -----------------------------
     # A rhythmic task satisfied by standing still is the failure mode a
@@ -137,17 +153,17 @@ def main() -> int:
         first, last = trend(values)
         notes.append(f"{key}: {first:.4f} -> {last:.4f}")
         if last < first * 0.9:
-            warns.append(f"{key} shrinking ({first:.4f} -> {last:.4f}) — the policy "
-                         f"is learning to move LESS; a motion reward that pays for "
-                         f"stillness is the usual cause")
+            hard_warns.append(f"{key} shrinking ({first:.4f} -> {last:.4f}) — the policy "
+                              f"is learning to move LESS; a motion reward that pays for "
+                              f"stillness is the usual cause")
 
     # --- WARN: entropy collapse ----------------------------------------------
     for key, values in find(series, "entropy").items():
         first, last = trend(values)
         notes.append(f"{key}: {first:.3f} -> {last:.3f}")
         if first > 0 and last < first * 0.25:
-            warns.append(f"{key} collapsed ({first:.2f} -> {last:.2f}) — policy "
-                         f"went degenerate; the reward curve can still look fine")
+            hard_warns.append(f"{key} collapsed ({first:.2f} -> {last:.2f}) — policy "
+                              f"went degenerate; the reward curve can still look fine")
 
     for key, values in find(series, "Mean reward", "Mean episode length").items():
         first, last = trend(values)
@@ -161,9 +177,11 @@ def main() -> int:
         print()
     for f in fails:
         print(f"  FAIL  {f}")
-    for w in warns:
+    for w in hard_warns:
         print(f"  WARN  {w}")
-    if not fails and not warns:
+    for w in warns:
+        print(f"  soft  {w}")
+    if not fails and not hard_warns and not warns:
         print("  All conditions clean.")
     print()
 
@@ -174,9 +192,14 @@ def main() -> int:
     if fails:
         print("VERDICT: ABORT — a listed FAIL invalidates the run. Fix and relaunch.")
         return 1
-    if warns:
-        print("VERDICT: INVESTIGATE — no fatal fault, but the run is not on track.")
+    if hard_warns:
+        print("VERDICT: INVESTIGATE — a kill-class signal is present (shrinking "
+              "motion, entropy collapse, or falls clearly rising).")
         return 3
+    if warns:
+        print("VERDICT: CONTINUE (with notes) — advisory signals only; an "
+              "unattended gate should not kill for these.")
+        return 0
     print("VERDICT: CONTINUE — the reward stack is behaving. Let it run.")
     return 0
 
