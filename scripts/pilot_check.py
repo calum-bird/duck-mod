@@ -50,12 +50,22 @@ def parse(path: str) -> dict[str, list[float]]:
 
 
 def trend(values: list[float], head_frac: float = 0.3) -> tuple[float, float]:
-    """Mean of the first and last slice — robust to per-iteration noise in a
-    way that comparing single endpoints is not."""
-    if len(values) < 4:
+    """Compare two RECENT windows, skipping the opening transient.
+
+    Comparing the last slice against the very first one is how this tool
+    reported a flat objective as "rising": every series climbs off its
+    initialisation, so including iteration 0 makes almost anything look
+    healthy. Judging the second half against the third quarter asks the
+    question that matters -- is it STILL improving -- rather than "is it
+    better than random".
+    """
+    if len(values) < 8:
         return (values[0] if values else 0.0, values[-1] if values else 0.0)
+    mid = len(values) // 2
     k = max(2, int(len(values) * head_frac))
-    return sum(values[:k]) / k, sum(values[-k:]) / k
+    early = values[mid : mid + k] or values[mid:]
+    late = values[-k:]
+    return sum(early) / len(early), sum(late) / len(late)
 
 
 def find(series: dict[str, list[float]], *fragments: str) -> dict[str, list[float]]:
@@ -107,8 +117,10 @@ def main() -> int:
         first, last = trend(values)
         notes.append(f"{key}: {first:.3f} -> {last:.3f}")
         if last <= first * 1.02:
-            warns.append(f"{key} is not rising ({first:.3f} -> {last:.3f}) — the "
-                         f"primary objective is not being learned")
+            warns.append(f"{key} has PLATEAUED ({first:.3f} -> {last:.3f}) — the "
+                         f"primary objective has stopped improving. If it is also "
+                         f"far from its 1.0 ceiling, the term is probably "
+                         f"satisfiable without doing the task.")
 
     # --- WARN: falls should be decreasing ------------------------------------
     for key, values in find(series, "fell_over").items():
@@ -116,6 +128,18 @@ def main() -> int:
         notes.append(f"{key}: {first:.2f} -> {last:.2f}")
         if last > first:
             warns.append(f"{key} rising ({first:.2f} -> {last:.2f}) — losing stability")
+
+    # --- WARN: the duck is moving LESS over time -----------------------------
+    # A rhythmic task satisfied by standing still is the failure mode a
+    # tracking Gaussian invites: holding the mean pose collects partial credit
+    # on every step while moving risks a fall that zeroes the gate.
+    for key, values in find(series, "peak_height").items():
+        first, last = trend(values)
+        notes.append(f"{key}: {first:.4f} -> {last:.4f}")
+        if last < first * 0.9:
+            warns.append(f"{key} shrinking ({first:.4f} -> {last:.4f}) — the policy "
+                         f"is learning to move LESS; a motion reward that pays for "
+                         f"stillness is the usual cause")
 
     # --- WARN: entropy collapse ----------------------------------------------
     for key, values in find(series, "entropy").items():
