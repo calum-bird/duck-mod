@@ -93,3 +93,22 @@ def test_bob_payoff_exposes_the_stand_still_loophole():
 def test_bob_payoff_stillness_falls_as_std_tightens():
     stills = [bc.bob_payoff(0.014, s)[0] for s in (0.010, 0.008, 0.006, 0.004)]
     assert stills == sorted(stills, reverse=True)
+
+
+def test_bob_velocity_reference_is_the_derivative_of_the_bob():
+    import math
+    A, bpm = torch.tensor(0.014), torch.tensor([120.0])
+    # Zero at the downbeat (bottom of the dip), +peak a quarter-beat later.
+    at_beat = bc.bob_velocity_reference(torch.tensor([0.0]), A, bpm)
+    quarter = bc.bob_velocity_reference(torch.tensor([0.125]), A, bpm)
+    assert abs(float(at_beat)) < 1e-6
+    assert math.isclose(float(quarter), 0.014 * 2 * math.pi * 2.0, rel_tol=1e-5)
+
+
+def test_sway_velocity_reference_peaks_at_the_bar_start():
+    import math
+    S, bpm = torch.tensor(0.012), torch.tensor([120.0])
+    start = bc.sway_velocity_reference(torch.tensor([0.0]), S, bpm)
+    turn = bc.sway_velocity_reference(torch.tensor([0.25]), S, bpm)
+    assert math.isclose(float(start), 0.012 * 2 * math.pi * 1.0, rel_tol=1e-5)
+    assert abs(float(turn)) < 1e-6

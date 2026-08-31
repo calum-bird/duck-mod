@@ -224,8 +224,44 @@ Three changes followed:
 3. **Sway moved 800 -> 1200 iterations.** Run 1 hardened stage 2 while stage 1
    had not consolidated — the pacing error this document already warned about.
 
-These are hypotheses backed by arithmetic, not by a successful run. The payoff
-ratio is now guarded by a test.
+**The std fix turned out to be insufficient.** `scripts/reward_probe.py` — which
+scores whole behaviours through the real reward terms, and which was only
+trusted after it *retrodicted* run 1 (the config that trained a statue must
+probe negative, and does: −0.96/step) — showed the trap survives every std:
+a clumsy first attempt at dancing loses ~45% of all gated income to falls,
+while a statue keeps 100% of the position Gaussians' free partial credit.
+No tolerance tuning changes who wins that comparison.
+
+The structural fix is an ordering: **move, then move in time, then move
+exactly.**
+
+| term | pays a statue | pays clumsy motion | schedule |
+|---|---|---|---|
+| `beat_bob_energy` (phase-blind \|v_z\| vs the commanded envelope) | 0 | yes, immediately | full at step 0, decayed to a floor |
+| `beat_bob_power` / `beat_sway_power` (signed v·v_ref correlation) | 0 | once roughly in phase | full at step 0 / with sway stage |
+| `beat_bob` / `beat_sway` Gaussians (precision) | partial credit | only when close | start small/off, ramp once motion exists |
+
+The energy term exists because the probe showed an early policy's phase error
+sits near quadrature, where the correlation pays nothing — something has to pay
+the very first wobble. It is capped at the commanded envelope, masked when the
+commanded amplitude is ~0 (the idle case), gated upright, and decayed by
+curriculum; its one known farmable edge (high-frequency micro-vibration) is
+priced by the action-rate penalties and visible in eval as high energy with
+near-zero travel.
+
+With this ordering the probe reports **+0.51/step out of stillness** for a
+clumsy attempt (40% amplitude, a quarter-beat late, fallen 45% of steps) and
+**+2.65/step against reverting** to a statue under the full late-stage weights
+— while run 1's configuration still probes negative. Also fixed on the way
+through: `beat_sway`'s std had the identical loophole (std = amplitude, statue
+collects 0.645 free) and is now 0.007, and the beat clock's tempo slot is
+encoded against the fixed global BPM envelope rather than the
+curriculum-mutated sampling range, which would have shifted the meaning of
+`twist[2]` mid-training and broken both the reward's and the host's decoding.
+
+These remain hypotheses validated by arithmetic and unit tests, not yet by a
+run. The probe, the payoff ratio, the zero-for-stillness property, the caps,
+the gates and every curriculum stage-0 weight are all under test (66 on CPU).
 
 ## Known failure modes
 

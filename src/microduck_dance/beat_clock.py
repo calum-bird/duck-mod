@@ -167,3 +167,28 @@ def bob_payoff(amplitude: float, std: float, lag: float = 0.003) -> tuple[float,
     still = float(torch.exp(-(((NOMINAL_HEIGHT - ref) / std) ** 2)).mean())
     tracking = math.exp(-((lag / std) ** 2))
     return still, tracking
+
+
+def bob_velocity_reference(bar_phase: torch.Tensor, amplitude: torch.Tensor, bpm: torch.Tensor) -> torch.Tensor:
+    """Target vertical velocity: the time-derivative of :func:`bob_reference`.
+
+    z_ref = h0 - A*cos(2*pi*b) with the beat phase b advancing at bpm/60 per
+    second, so dz/dt = A * 2*pi * (bpm/60) * sin(2*pi*b). At 120 BPM and a
+    14 mm amplitude the peak is ~0.18 m/s.
+
+    Why the derivative matters at all: a position Gaussian is partly
+    satisfiable by standing at the reference's mean, but a VELOCITY reference
+    is orthogonal to stillness -- a motionless duck has v_z = 0 always, and no
+    choice of where it stands changes that.
+    """
+    b = beat_phase(bar_phase)
+    return amplitude * TWO_PI * (bpm / 60.0) * torch.sin(TWO_PI * b)
+
+
+def sway_velocity_reference(bar_phase: torch.Tensor, amplitude: torch.Tensor, bpm: torch.Tensor) -> torch.Tensor:
+    """Target lateral velocity: the time-derivative of :func:`sway_reference`.
+
+    y_ref = S*sin(2*pi*phi) with the bar phase advancing at bpm/120 per second,
+    so dy/dt = S * 2*pi * (bpm/120) * cos(2*pi*phi).
+    """
+    return amplitude * TWO_PI * (bpm / 120.0) * torch.cos(TWO_PI * bar_phase)

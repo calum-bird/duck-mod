@@ -82,6 +82,9 @@ def test_head_is_free_to_oscillate(cfg):
         ("beat_footfall_weight", "beat_footfall"),
         ("foot_alternation_weight", "foot_alternation_penalty"),
         ("beat_yaw_weight", "beat_yaw"),
+        ("beat_bob_weight", "beat_bob"),
+        ("beat_bob_energy_weight", "beat_bob_energy"),
+        ("beat_sway_power_weight", "beat_sway_power"),
     ],
 )
 def test_curriculum_stage_zero_matches_the_initial_weight(cfg, curriculum_name, reward_name):
@@ -171,3 +174,25 @@ def test_bob_std_makes_standing_still_a_bad_deal(cfg):
         f"std={std} lets standing still score {still:.3f} against {tracking:.3f} "
         f"for tracking ({tracking / still:.2f}x) — the policy will stand still"
     )
+
+def test_motion_terms_carry_the_early_incentive(cfg):
+    """The probe-validated ordering: terms that pay stillness exactly zero run
+    at full weight from step 0, while the position Gaussians — partly
+    satisfiable by standing at the reference's mean — start small and ramp in
+    once motion exists. Reversing this recreates run 1's trap."""
+    from microduck_dance import mdp as dmdp
+
+    assert cfg.rewards["beat_bob_power"].weight == dmdp.POWER_WEIGHT
+    assert cfg.rewards["beat_bob_energy"].weight == dmdp.ENERGY_WEIGHT
+    assert cfg.rewards["beat_bob"].weight == 1.0  # precision starts SMALL
+    stages = cfg.curriculum["beat_bob_weight"].params["weight_stages"]
+    assert stages[-1]["weight"] == 4.0            # and ends primary
+    decay = cfg.curriculum["beat_bob_energy_weight"].params["weight_stages"]
+    assert decay[-1]["weight"] > 0.0              # bootstrap keeps a floor
+    assert decay[-1]["weight"] < dmdp.ENERGY_WEIGHT
+
+
+def test_sway_std_is_tight_relative_to_its_amplitude(cfg):
+    # The same loophole beat_bob had: at std == amplitude a statue collects
+    # 0.645 of the sway term for free.
+    assert cfg.rewards["beat_sway"].params["std"] <= 0.008

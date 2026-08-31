@@ -19,6 +19,7 @@ class _Data:
     def __init__(self, pos, quat):
         self.root_link_pos_w = pos
         self.root_link_quat_w = quat
+        self.root_link_lin_vel_w = torch.zeros_like(pos)
 
 
 class _Asset:
@@ -103,7 +104,10 @@ class StubEnv:
         quat = torch.zeros(n, 4)
         quat[:, 0] = torch.cos(yaw_t / 2)
         quat[:, 3] = torch.sin(yaw_t / 2)
+        old_vel = getattr(self, "_asset", None)
         self._asset = _Asset(pos, quat)
+        if old_vel is not None:
+            self._asset.data.root_link_lin_vel_w = old_vel.data.root_link_lin_vel_w
         if hasattr(self, "scene"):
             self.scene._asset = self._asset
 
@@ -121,6 +125,9 @@ class StubEnv:
 
     def set_xy(self, xy: torch.Tensor):
         self._asset.data.root_link_pos_w[:, :2] = xy
+
+    def set_lin_vel(self, vel: torch.Tensor):
+        self._asset.data.root_link_lin_vel_w[:] = vel
 
     def set_contacts(self, contacts: torch.Tensor):
         self.scene.sensors["feet_ground_contact"].data.found = contacts

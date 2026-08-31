@@ -65,9 +65,14 @@ class BeatClockCommand(UniformVelocityCommand):
         self._bar_phase = torch.remainder(self._bar_phase + dt / bar_period, 1.0)
         self.vel_command_b[:, 0] = torch.cos(beat_clock.TWO_PI * self._bar_phase)
         self.vel_command_b[:, 1] = torch.sin(beat_clock.TWO_PI * self._bar_phase)
-        self.vel_command_b[:, 2] = beat_clock.tempo_to_norm(
-            self._bpm, self.cfg.bpm_range[0], self.cfg.bpm_range[1]
-        )
+        # Encode against the FIXED global envelope, never cfg.bpm_range: the
+        # curriculum widens bpm_range over training, and encoding against a
+        # moving range would (a) shift what twist[2] means under the policy's
+        # feet mid-run, (b) disagree with the reward terms decoding it via
+        # norm_to_tempo's global constants, and (c) disagree with the host's
+        # beat_source at deployment. The range narrows what is SAMPLED, not
+        # how it is REPORTED.
+        self.vel_command_b[:, 2] = beat_clock.tempo_to_norm(self._bpm)
 
     def reset(self, env_ids: torch.Tensor | None) -> dict:
         if env_ids is not None and len(env_ids) > 0:

@@ -303,3 +303,97 @@ def test_tempo_change_probability_stays_off_until_its_stage():
         e = _curriculum_env(step)
         dance_mdp.beat_tempo_change_prob_curriculum(e, None, "twist", stages)
         assert e.command_manager.get_term("twist").cfg.tempo_change_prob == expected, step
+
+
+# --------------------------------------------------------------------------- #
+# Motion terms: power (in time) and energy (at all)                           #
+# --------------------------------------------------------------------------- #
+
+
+def _motion_env(bar_phase: float, bob=0.014, sway=0.012, bpm=120.0):
+    from microduck_dance import beat_clock as _bc
+
+    e = StubEnv(num_envs=1)
+    norm = float(_bc.tempo_to_norm(torch.tensor([bpm])))
+    e.set_commands(
+        twist=twist_at(bar_phase, num_envs=1, tempo_norm=norm),
+        body_pose=amplitudes(bob=bob, sway=sway, num_envs=1),
+    )
+    return e
+
+
+def _v_peak(bob=0.014, bpm=120.0):
+    return bob * 2 * math.pi * (bpm / 60.0)
+
+
+def test_power_pays_stillness_exactly_zero():
+    # Not "little": zero. This is the property that breaks run 1's trap — no
+    # place the duck can STAND changes what this term pays.
+    for phase in (0.0, 0.125, 0.3, 0.77):
+        e = _motion_env(phase)
+        assert torch.all(dance_mdp.beat_bob_power(e) == 0.0)
+        assert torch.all(dance_mdp.beat_bob_energy(e) == 0.0)
+
+
+def test_power_rewards_in_phase_and_charges_anti_phase_motion():
+    # bar_phase 0.125 -> beat_phase 0.25 -> reference velocity at +peak.
+    e = _motion_env(0.125)
+    vp = _v_peak()
+    e.set_lin_vel(torch.tensor([[0.0, 0.0, vp]]))
+    up = dance_mdp.beat_bob_power(e)
+    e.set_lin_vel(torch.tensor([[0.0, 0.0, -vp]]))
+    down = dance_mdp.beat_bob_power(e)
+    assert torch.allclose(up, torch.ones(1), atol=1e-4)
+    assert torch.allclose(down, -torch.ones(1), atol=1e-4)
+
+
+def test_power_is_capped_against_contact_spikes():
+    e = _motion_env(0.125)
+    e.set_lin_vel(torch.tensor([[0.0, 0.0, 10.0]]))  # a contact impulse
+    assert float(dance_mdp.beat_bob_power(e)) <= 2.0 + 1e-6
+
+
+def test_energy_pays_motion_regardless_of_phase():
+    # The division of labour: at the up-beat, DOWNWARD motion is charged by
+    # power but still paid by energy — energy exists precisely because early
+    # policies move at the wrong time, and moving wrongly must beat a statue.
+    e = _motion_env(0.125)
+    vp = _v_peak()
+    e.set_lin_vel(torch.tensor([[0.0, 0.0, -vp]]))
+    assert torch.allclose(dance_mdp.beat_bob_energy(e), torch.ones(1), atol=1e-4)
+    assert float(dance_mdp.beat_bob_power(e)) < 0.0
+
+
+def test_energy_is_capped_so_thrashing_cannot_outearn_dancing_much():
+    e = _motion_env(0.125)
+    e.set_lin_vel(torch.tensor([[0.0, 0.0, 5.0]]))
+    assert float(dance_mdp.beat_bob_energy(e)) <= 1.0 + 1e-6
+
+
+def test_idle_amplitude_masks_both_motion_terms():
+    # Commanded amplitude ~0 means "stand still on the beat": wiggling then
+    # earns nothing from either term.
+    e = _motion_env(0.125, bob=0.0)
+    e.set_lin_vel(torch.tensor([[0.0, 0.0, 0.1]]))
+    assert torch.all(dance_mdp.beat_bob_energy(e) == 0.0)
+    assert torch.all(dance_mdp.beat_bob_power(e) == 0.0)
+
+
+def test_motion_terms_are_zero_while_fallen():
+    e = _motion_env(0.125)
+    e.set_lin_vel(torch.tensor([[0.0, 0.0, _v_peak()]]))
+    e.set_tilt(60.0)
+    assert torch.all(dance_mdp.beat_bob_power(e) == 0.0)
+    assert torch.all(dance_mdp.beat_bob_energy(e) == 0.0)
+
+
+def test_sway_power_measures_along_the_trunk_lateral_axis():
+    from microduck_dance import beat_clock as _bc
+
+    # bar_phase 0 -> sway velocity reference at +peak along body y. Yaw the duck
+    # 90 degrees: its body-y is world -x, so world -x motion must score +1.
+    e = _motion_env(0.0)
+    e.set_yaw(math.pi / 2)
+    vp = 0.012 * 2 * math.pi * (120.0 / 120.0)
+    e.set_lin_vel(torch.tensor([[-vp, 0.0, 0.0]]))
+    assert torch.allclose(dance_mdp.beat_sway_power(e), torch.ones(1), atol=1e-3)

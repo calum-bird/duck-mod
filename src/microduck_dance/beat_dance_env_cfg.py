@@ -185,9 +185,43 @@ def make_microduck_beat_dance_env_cfg(
         "max_sway": MAX_SWAY,
         "max_yaw": MAX_YAW,
     }
+    # === The move -> in-time -> exactly ordering (probe-derived, post run 1) ===
+    # Every position Gaussian is partly satisfiable by standing at the
+    # reference's mean, and the hard gate taxes any motion that risks a fall.
+    # scripts/reward_probe.py shows that with the Gaussians at full weight from
+    # step 0, a clumsy first attempt at dancing earns LESS than a statue at
+    # every std tried (-0.96/step at run 1's config) -- a local optimum with no
+    # exit, which is exactly what run 1 trained. With precision ramped in later
+    # over motion terms that pay stillness EXACTLY zero, the probe gives
+    # +0.51/step out of stillness at stage 1 and +2.65/step against reverting
+    # at stage 3, while still retrodicting run 1's failure.
+    #
+    # beat_bob_power: signed correlation of vertical velocity with the
+    # reference's derivative. Stillness earns zero, the first in-phase wobble
+    # pays, anti-phase motion is charged. Full weight from step 0.
+    cfg.rewards["beat_bob_power"] = RewardTermCfg(
+        func=dance_mdp.beat_bob_power,
+        weight=dance_mdp.POWER_WEIGHT,
+        params={"command_name": "twist", "body_command_name": "body_pose", **_amp_params},
+    )
+    # beat_bob_energy: phase-BLIND vertical motion of the commanded scale. An
+    # early policy's phase error sits near quadrature, where the correlation
+    # pays nothing -- this pays the moment it moves at all, and the curriculum
+    # decays it once timing terms take over.
+    cfg.rewards["beat_bob_energy"] = RewardTermCfg(
+        func=dance_mdp.beat_bob_energy,
+        weight=dance_mdp.ENERGY_WEIGHT,
+        params={"command_name": "twist", "body_command_name": "body_pose", **_amp_params},
+    )
+    cfg.rewards["beat_sway_power"] = RewardTermCfg(
+        func=dance_mdp.beat_sway_power,
+        weight=0.0,  # ramped with the sway curriculum (stage-0 must match)
+        params={"command_name": "twist", "body_command_name": "body_pose", **_amp_params},
+    )
     cfg.rewards["beat_bob"] = RewardTermCfg(
         func=dance_mdp.beat_bob_tracking,
-        weight=4.0,  # primary objective from step 0
+        weight=1.0,  # PRECISION term: small but alive at step 0, ramped to 4.0
+                     # by the beat_bob_weight curriculum once motion exists
         params={
             "command_name": "twist",
             "body_command_name": "body_pose",
@@ -210,7 +244,10 @@ def make_microduck_beat_dance_env_cfg(
         params={
             "command_name": "twist",
             "body_command_name": "body_pose",
-            "std": 0.012,
+            # 0.012 -> 0.007: the same stand-still loophole beat_bob had, one
+            # file-width away. At std equal to the 12 mm amplitude, a statue
+            # collects 0.645 of this term for free.
+            "std": 0.007,
             **_amp_params,
         },
     )
@@ -276,6 +313,33 @@ def make_microduck_beat_dance_env_cfg(
             params={"reward_name": reward_name, "weight_stages": stages},
         )
 
+    # Precision ramps: bob Gaussian grows only as the motion terms hand over.
+    cfg.curriculum["beat_bob_weight"] = _stage(
+        "beat_bob",
+        [
+            {"step": 0, "weight": 1.0},
+            {"step": 600 * NUM_STEPS_PER_ENV, "weight": 2.5},
+            {"step": _STAGE_SWAY * NUM_STEPS_PER_ENV, "weight": 4.0},
+        ],
+    )
+    # The bootstrap decays but keeps a floor: motion must never again earn
+    # strictly less than a statue, whatever the Gaussians misprice.
+    cfg.curriculum["beat_bob_energy_weight"] = _stage(
+        "beat_bob_energy",
+        [
+            {"step": 0, "weight": dance_mdp.ENERGY_WEIGHT},
+            {"step": _STAGE_FOOTFALL * NUM_STEPS_PER_ENV, "weight": dance_mdp.ENERGY_WEIGHT * 0.5},
+            {"step": _STAGE_TEMPO_WIDE * NUM_STEPS_PER_ENV, "weight": dance_mdp.ENERGY_WEIGHT * 0.25},
+        ],
+    )
+    cfg.curriculum["beat_sway_power_weight"] = _stage(
+        "beat_sway_power",
+        [
+            {"step": 0, "weight": 0.0},
+            {"step": _STAGE_SWAY * NUM_STEPS_PER_ENV, "weight": dance_mdp.POWER_WEIGHT * 0.25},
+            {"step": _STAGE_FOOTFALL * NUM_STEPS_PER_ENV, "weight": dance_mdp.POWER_WEIGHT * 0.5},
+        ],
+    )
     cfg.curriculum["beat_sway_weight"] = _stage(
         "beat_sway",
         [

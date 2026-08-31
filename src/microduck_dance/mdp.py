@@ -30,6 +30,12 @@ import torch
 
 from microduck_dance import beat_clock
 
+# Weights for the motion-bootstrap terms, shared between the env cfg and
+# scripts/reward_probe.py (which must run without mjlab). Chosen by the probe:
+# see docs/training.md, "Run 1".
+POWER_WEIGHT = 4.0        # beat_bob_power; sway power rides at half
+ENERGY_WEIGHT = 3.0       # beat_bob_energy at stage 1, decayed by curriculum
+
 if TYPE_CHECKING:  # pragma: no cover - typing only
     from mjlab.envs.manager_based_rl_env import ManagerBasedRlEnv
 
@@ -403,3 +409,122 @@ def beat_tempo_change_prob_curriculum(
             current = stage["prob"]
     term.cfg.tempo_change_prob = float(current)
     return torch.tensor(float(current))
+
+
+# --------------------------------------------------------------------------- #
+# Beat power: the term that makes moving worth starting                       #
+# --------------------------------------------------------------------------- #
+
+
+def _power_reward(v_actual: torch.Tensor, v_ref: torch.Tensor, v_peak: torch.Tensor) -> torch.Tensor:
+    """Signed, normalised correlation between actual and reference velocity.
+
+    ``(v . v_ref) / v_peak^2``, with v clipped to 2x the reference peak so a
+    contact spike cannot mint reward. Perfect tracking averages +0.5 over a
+    cycle (mean of sin^2); stillness earns EXACTLY zero; anti-phase motion
+    earns -0.5.
+
+    Why this shape and not another Gaussian: run 1 proved (and
+    scripts/reward_probe.py now reproduces) that every position Gaussian is
+    partly satisfiable by standing at the reference's mean, so the whole stack
+    paid a risk-free ~45% for doing nothing and clumsy first attempts earned
+    LESS than that -- a local optimum with no gradient out. A correlation is
+    zero-centred: stillness collects nothing, and the very first wobble in
+    phase with the beat pays. This is the term that makes exploration worth
+    the falls.
+
+    A zero commanded amplitude gives v_ref = 0, so the idle case earns exactly
+    zero rather than dividing by zero (v_peak is floored).
+    """
+    v_peak = v_peak.clamp(min=1e-3)
+    v = v_actual.clamp(-2.0 * v_peak, 2.0 * v_peak)
+    return (v * v_ref) / v_peak.pow(2)
+
+
+def beat_bob_power(
+    env,
+    command_name: str = "twist",
+    body_command_name: str = "body_pose",
+    max_bob: float = 0.025,
+    max_sway: float = 0.020,
+    max_yaw: float = 0.25,
+    asset_name: str = "robot",
+) -> torch.Tensor:
+    """Pay vertical motion that is in phase with the beat. Zero for stillness."""
+    cmd = env.command_manager.get_command(command_name)
+    phase = beat_clock.bar_phase_from_command(cmd)
+    bpm = beat_clock.norm_to_tempo(cmd[:, 2])
+    bob, _, _ = _amplitudes(env, body_command_name, max_bob, max_sway, max_yaw)
+    v_ref = beat_clock.bob_velocity_reference(phase, bob, bpm)
+    v_peak = bob * beat_clock.TWO_PI * (bpm / 60.0)
+    asset = env.scene[asset_name]
+    vz = torch.nan_to_num(asset.data.root_link_lin_vel_w[:, 2], nan=0.0)
+    return _power_reward(vz, v_ref, v_peak) * dance_gate(env, asset_name)
+
+
+def beat_sway_power(
+    env,
+    command_name: str = "twist",
+    body_command_name: str = "body_pose",
+    max_bob: float = 0.025,
+    max_sway: float = 0.020,
+    max_yaw: float = 0.25,
+    asset_name: str = "robot",
+) -> torch.Tensor:
+    """Pay lateral motion in phase with the bar sway, along the trunk's own y."""
+    cmd = env.command_manager.get_command(command_name)
+    phase = beat_clock.bar_phase_from_command(cmd)
+    bpm = beat_clock.norm_to_tempo(cmd[:, 2])
+    _, sway, _ = _amplitudes(env, body_command_name, max_bob, max_sway, max_yaw)
+    v_ref = beat_clock.sway_velocity_reference(phase, sway, bpm)
+    v_peak = sway * beat_clock.TWO_PI * (bpm / 120.0)
+    asset = env.scene[asset_name]
+    _, quat = _root_state(env, asset_name)
+    v_lat = (
+        torch.nan_to_num(asset.data.root_link_lin_vel_w[:, :2], nan=0.0)
+        * _body_y_axis(quat)
+    ).sum(dim=-1)
+    return _power_reward(v_lat, v_ref, v_peak) * dance_gate(env, asset_name)
+
+
+def beat_bob_energy(
+    env,
+    command_name: str = "twist",
+    body_command_name: str = "body_pose",
+    max_bob: float = 0.025,
+    max_sway: float = 0.020,
+    max_yaw: float = 0.25,
+    asset_name: str = "robot",
+) -> torch.Tensor:
+    """Phase-BLIND vertical motion: pay for bobbing at all, whatever the timing.
+
+    ``min(|v_z|, v_peak) / v_peak`` — zero for stillness, ~0.64 for a clean bob
+    of the commanded scale (mean |sin|), capped at 1 so over-thrashing cannot
+    out-earn dancing by much. Gated upright like everything else.
+
+    Why a deliberately timing-free term exists in a timing task: the probe
+    shows an early policy's phase error sits near QUADRATURE (a quarter-beat
+    late), where the phase-locked power term pays nothing — so power alone
+    cannot lift the first clumsy attempts above the stillness baseline. This
+    term pays those attempts the moment they move, and the curriculum decays it
+    once motion exists, handing over to power (timing) and the Gaussians
+    (precision): move, then move in time, then move exactly.
+
+    Known farmable edge, accepted with eyes open: a high-frequency micro
+    vibration could hold |v_z| near v_peak. Action-rate and acceleration
+    penalties charge exactly that behaviour, the term decays before it would
+    dominate, and pilot_check watches peak_height — a vibrating policy shows
+    near-zero travel with high energy income.
+
+    A near-zero commanded amplitude masks the term entirely, so the idle case
+    ("stand still on the beat") cannot be farmed by wiggling.
+    """
+    cmd = env.command_manager.get_command(command_name)
+    bpm = beat_clock.norm_to_tempo(cmd[:, 2])
+    bob, _, _ = _amplitudes(env, body_command_name, max_bob, max_sway, max_yaw)
+    v_peak = (bob * beat_clock.TWO_PI * (bpm / 60.0)).clamp(min=1e-3)
+    asset = env.scene[asset_name]
+    vz = torch.nan_to_num(asset.data.root_link_lin_vel_w[:, 2], nan=0.0)
+    reward = vz.abs().clamp(max=v_peak) / v_peak
+    commanded = (bob > 1e-3).float()
+    return reward * commanded * dance_gate(env, asset_name)
