@@ -46,14 +46,29 @@ long run starts.
 
 ## The run plan
 
-**Stage 0 — calibrate (~15 min, ~$1).** One `h100-1`. `scripts/setup_node.sh`,
-then `scripts/calibrate_throughput.py`. This produces the one number everything
-else depends on: env-steps/s, and therefore how many iterations fit a budget
-and whether the curriculum needs compressing. It uses a two-point timing method
-so fixed startup — imports, MJCF parse, Warp kernel compile — cancels out
-instead of poisoning the measurement.
+**Stage 0 — calibrate. Done: 2026-08-31, 12.8 min, $0.85.** Measured on one
+`h100-1` (H100 80GB HBM3), `Mjlab-BeatDance-Flat-MicroDuck`, two timed runs per
+env count so fixed startup cancels out of the marginal cost:
 
-**Then snapshot the node.** `from_snapshot` restores the volume *and* the image
+| envs | startup s | s/iter | env-steps/s | iters in 45 min |
+|---|---|---|---|---|
+| 1024 | 14.3 | 1.142 | 21,511 | 2,350 |
+| 2048 | 15.1 | 1.226 | 40,093 | 2,190 |
+| 4096 | 17.5 | 1.418 | 69,339 | 1,892 |
+| 8192 | 25.1 | 2.058 | 95,542 | 1,299 |
+
+**Operating point: 4096 envs.** Throughput keeps rising to 8192, but the gain
+per doubling is flattening (1.86x, 1.73x, 1.38x) and *iterations* fall as the
+batch grows — and the curriculum counts iterations, not samples. 4096 is also
+upstream's default, so the PPO hyperparameters are tuned there.
+
+**The 3400-iteration curriculum needs ~80 min at 4096 (~$5.35), not 45.** Either
+budget the 80 minutes or scale the stage boundaries by ~0.56. Running it
+uncompressed in 45 minutes would spend the whole budget on the bob and never
+switch the footfall term on — which is exactly the failure calibration exists to
+prevent.
+
+**Then snapshot the node** (done: `snap-dm756`). `from_snapshot` restores the volume *and* the image
 it was built under, so venvs and compiled extensions resume intact. Every
 subsequent node skips the ~3 GB `uv sync` entirely. This is the single highest-
 leverage setup step: without it, a 30-minute experiment pays 20% overhead just
@@ -71,9 +86,12 @@ same tempo-sweep table, which is what makes them comparable at all.
 
 Pass credentials through `run_command`'s `env`, never in the command string.
 
-- **wandb** — wanted, not required. `export.py` accepts a local
-  `checkpoint_file`, so train → export → play works without it. What wandb buys
-  is run *comparison*, which is the entire point of Stage 2.
+- **wandb** — required for training as shipped. rsl_rl's runner defaults to the
+  wandb logger and raises `UsageError: No API key configured` before the first
+  iteration. `WANDB_MODE=disabled` makes it a no-op for unattended runs (that is
+  how calibration ran). Export is genuinely independent: `export.py` accepts a
+  local `checkpoint_file`. What a real key buys is run *comparison*, which is the
+  entire point of Stage 2.
 - **Hugging Face — not needed.** All 58 meshes and every robot XML are vendored
   in microduck_rl; `huggingface_hub` is imported only by its HF-Jobs submitter
   and result uploader. A token is needed only to submit to HF Jobs (we're using
@@ -82,15 +100,18 @@ Pass credentials through `run_command`'s `env`, never in the command string.
 
 ## Cost sketch
 
-| | GPU-hours | ~Cost |
-|---|---|---|
-| Calibrate + snapshot | 0.3 | ~$1 |
-| One full training run | 1 | ~$4 |
-| 6 variants x 3 seeds x 1 h | 18 | ~$65 |
-| A two-week search, ~8 GPU-h/day | ~110 | ~$400 |
+Measured rate: **$0.0666/min = $4.00/GPU-hour**, 15-minute session minimum.
 
-Calibration costs about a dollar and tells you whether the honest number for
-the rest is $65 or $650.
+| | GPU-hours | Cost |
+|---|---|---|
+| Calibrate + snapshot | 0.21 | **$0.85 (actual)** |
+| One full 3400-iteration run @ 4096 | 1.34 | ~$5.35 |
+| 6 variants x 3 seeds | 24 | ~$96 |
+| A two-week search, ~8 GPU-h/day | ~110 | ~$440 |
+
+Calibration cost 85 cents and turned "one run fits in an hour" into "one run is
+80 minutes" — a 78% underestimate that would have produced a duck that bobs and
+never steps.
 
 ## Housekeeping
 
@@ -98,3 +119,18 @@ the rest is $65 or $650.
 grace window. Use `hold_node` to keep one awake across turns rather than a sleep
 loop. Group everything under one mission so cost and conclusions land on a page
 a human can read.
+
+## Gotchas found the hard way
+
+- The container shell is `sh`, not bash: no `time` builtin. Time with
+  `S=$(date +%s)` … `$(( $(date +%s) - S ))`.
+- Piping a training run through `tail` buffers everything until exit, so a
+  detached command shows an empty log for minutes. Redirect to a file instead.
+- Warp compiles kernels on the first run (~2-4 min, CPU-bound, GPU at 0%). It
+  caches to `~/.cache/warp`, after which startup is ~15 s. The snapshot carries
+  that cache.
+- The task package is installed into microduck_rl's own venv with
+  `uv pip install --no-deps -e ~/work/duck-mod`, which avoids resolving a second
+  ~4 GB dependency tree.
+- A node wake from stopped was quoted at ~7.5-10 min. Restoring from the
+  snapshot is the faster path back.
