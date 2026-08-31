@@ -9,17 +9,23 @@ export PATH="$HOME/.local/bin:$PATH"
 
 cd ~/work/duck-mod && git pull -q origin claude/microduck-training-27jcop
 cd ~/work/microduck_rl
-# --no-sync everywhere below: `uv run` otherwise re-syncs the venv to
-# microduck_rl's lockfile, which can STRIP the manually-installed dance
-# package between the install and the command that needs it (observed
-# 2026-08-31: list-envs lost the tasks that were installed one line up).
+# --no-sync everywhere below: `uv run` without it re-syncs the venv to
+# microduck_rl's lockfile, which does not know about the dance package.
+#
+# NEVER pipe a long-lived producer into grep -q / head under pipefail here:
+# the consumer exits at first match, the producer takes SIGPIPE, and pipefail
+# turns a SUCCESSFUL check into a failed script. That exact bug aborted two
+# launches of this script while the tasks were registered and visible in its
+# own log. Buffer to a file, then grep the file.
 uv sync -q
 uv pip install -q --no-deps -e ~/work/duck-mod
-uv run --no-sync list-envs 2>/dev/null | grep -q Dance || {
+uv run --no-sync list-envs > /tmp/envs.txt 2>&1 || true
+grep -q Dance /tmp/envs.txt || {
     echo "dance tasks missing after install; retrying verbosely"
     uv pip install --force-reinstall --no-deps -e ~/work/duck-mod
-    uv run --no-sync list-envs 2>&1 | grep -iE "dance|warn|error" | head -5
-    uv run --no-sync list-envs 2>/dev/null | grep -q Dance || { echo "dance tasks missing"; exit 1; }
+    uv run --no-sync list-envs > /tmp/envs.txt 2>&1 || true
+    grep -iE "dance|warn|error|traceback" /tmp/envs.txt || true
+    grep -q Dance /tmp/envs.txt || { echo "dance tasks missing"; exit 1; }
 }
 
 # CPU-side invariants first: the probe tests fail in seconds if the reward
@@ -51,7 +57,8 @@ if python3 ~/work/duck-mod/scripts/pilot_check.py ~/train2.log \
         --min-iters 400 --objective beat_bob; then
     echo "GATE: CONTINUE — letting the run finish (~90 min total)"
     wait $TRAIN_PID
-    CK=$(ls -t wandb/run-*/files/model_*.pt | head -1)
+    CK=$(ls -t wandb/run-*/files/model_*.pt 2>/dev/null | head -n 1 || true)
+    [ -n "$CK" ] || { echo "no checkpoint found"; exit 1; }
     uv run --no-sync scripts/export.py Mjlab-BeatDance-Flat-MicroDuck --checkpoint-file "$CK"
     echo "exported: output.onnx — eval it on any CPU box:"
     echo "  MICRODUCK_RL=~/work/microduck_rl python ~/work/duck-mod/scripts/eval_dance.py \\"
