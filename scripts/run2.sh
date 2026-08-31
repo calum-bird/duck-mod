@@ -48,13 +48,36 @@ echo "training pid $TRAIN_PID; gate at ~500 iterations (~12 min)"
 #   ABORT  Episode_Reward/beat_bob_energy flat near zero at iter 500
 #           (the escape term is not being collected -> no motion)
 #   HOLD   entropy falling fast while energy is flat
-# pilot_check encodes all of these:
-while [ "$(grep -c 'Iteration time' ~/train2.log 2>/dev/null || echo 0)" -lt 500 ]; do
-    kill -0 $TRAIN_PID 2>/dev/null || { echo "trainer died"; tail -30 ~/train2.log; exit 1; }
-    sleep 30
+# pilot_check encodes all of these.
+#
+# grep -c prints its count even when it exits nonzero, so `|| echo 0` yields
+# "0<newline>0" and [ chokes -- which silently ended this loop on iteration
+# zero and had the gate execute a healthy 12-second-old trainer. Count into a
+# variable and default it instead.
+iters_logged() {
+    n=$(grep -c "Iteration time" ~/train2.log 2>/dev/null || true)
+    [ -n "$n" ] || n=0
+    printf '%s' "$n"
+}
+wait_for_iters() {
+    while [ "$(iters_logged)" -lt "$1" ]; do
+        kill -0 $TRAIN_PID 2>/dev/null || { echo "trainer died at $(iters_logged) iterations"; tail -30 ~/train2.log; exit 1; }
+        sleep 30
+    done
+}
+wait_for_iters 500
+# rc 2 means "too early to judge" -- wait for more iterations, never kill on it.
+verdict=2; tries=0
+while [ "$verdict" -eq 2 ] && [ "$tries" -lt 6 ]; do
+    set +e
+    python3 ~/work/duck-mod/scripts/pilot_check.py ~/train2.log \
+        --min-iters 400 --objective beat_bob
+    verdict=$?
+    set -e
+    tries=$((tries + 1))
+    [ "$verdict" -eq 2 ] && wait_for_iters $((500 + tries * 100))
 done
-if python3 ~/work/duck-mod/scripts/pilot_check.py ~/train2.log \
-        --min-iters 400 --objective beat_bob; then
+if [ "$verdict" -eq 0 ]; then
     echo "GATE: CONTINUE — letting the run finish (~90 min total)"
     wait $TRAIN_PID
     CK=$(ls -t wandb/run-*/files/model_*.pt 2>/dev/null | head -n 1 || true)
