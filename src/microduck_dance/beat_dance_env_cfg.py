@@ -91,9 +91,16 @@ def make_microduck_beat_dance_env_cfg(
     command: UniformVelocityCommandCfg = cfg.commands["twist"]
     command.rel_standing_envs = 0.0
     command.rel_heading_envs = 0.0
+    # Carry over only the fields BeatClockCommandCfg actually declares. The
+    # velocity env swaps in its own cfg subclass carrying extra knobs
+    # (rel_turn_in_place_envs, and whatever it grows next), and splatting those
+    # into a different dataclass is a TypeError at import — which surfaces as
+    # the whole task package silently failing to register.
+    _allowed = {f.name for f in dataclasses.fields(BeatClockCommandCfg)}
+    _carried = {k: v for k, v in vars(command).items() if k in _allowed}
     cfg.commands["twist"] = BeatClockCommandCfg(
         **{
-            **vars(command),
+            **_carried,
             "class_type": BeatClockCommand,
             # Start at an effectively fixed 120 BPM: one tempo to learn before
             # being asked to generalise across tempi. Widened by curriculum.
