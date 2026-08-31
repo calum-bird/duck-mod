@@ -327,3 +327,21 @@ the gates and every curriculum stage-0 weight are all under test (66 on CPU).
   half of the bar we are in. Rewarding the matching foot is a stricter
   alternative to `foot_alternation_penalty`, at the cost of prescribing more of
   the gait than the policy needs to be told.
+
+## Results (2026-08-31, runs 2-4)
+
+**Shipped policy: run 2** (`run2_beat_dance.onnx`). In the deploy sim at the
+best command — 127 BPM, bob 12 mm, sway 6 mm, yaw 0.05 — it dances 20 s with
+**zero falls**, mean timing error 88 ms, 37% of strikes within ±50 ms, foot
+alternation 0.70, ~18 mm measured bob, drifting ~1 m/20 s. Stability is
+amplitude-dependent: ≥14 mm commanded bob degrades toward falls. The demo
+video (`microduck_dance.mp4`) is this policy over Bauchamp's CC0
+"127 tamil dance bass and beat" at its measured 127.0 BPM.
+
+Run 3 (fall tax at weight 4 from iter 1600) taught freezing — killed. Run 4
+(stepping-first curriculum, γ=0.995, modest late tax) trained the healthiest
+curves yet (episodes 2x run 2 early on) but transferred worse to plain MuJoCo;
+kept as `run4_beat_dance.onnx` for study. Open problems, in value order:
+close the mjlab→MuJoCo actuator gap (likely why run 4's advantage inverted),
+stability at full amplitude, tighter beat lock (the 88 ms is groove-adjacent,
+not metronome-locked), and hardware validation via the Backlash variant.
