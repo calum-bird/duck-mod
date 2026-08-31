@@ -49,6 +49,9 @@ def main() -> int:
     p.add_argument("--budget-minutes", type=float, default=45.0)
     p.add_argument("--curriculum-iters", type=int, default=3400,
                    help="iterations the curriculum is written for")
+    p.add_argument("--reference-envs", type=int, default=4096,
+                   help="batch size the PPO hyperparameters are tuned at; the "
+                        "curriculum is sized against this row, not the fastest")
     p.add_argument("extra", nargs="*", help="extra flags forwarded to train")
     args = p.parse_args()
 
@@ -57,7 +60,7 @@ def main() -> int:
 
     print(f"{'envs':>7} {'startup s':>10} {'s/iter':>8} {'steps/s':>12} {'iters/budget':>13}")
     print("-" * 54)
-    best = None
+    rows: list[tuple[int, float, float, int]] = []
     for n in args.envs:
         t_short = time_run(args.task, n, args.short, args.extra)
         t_long = time_run(args.task, n, args.long, args.extra)
@@ -69,16 +72,32 @@ def main() -> int:
         steps_s = n * STEPS_PER_ENV / per_iter
         iters = int((args.budget_minutes * 60 - startup) / per_iter)
         print(f"{n:7d} {startup:10.1f} {per_iter:8.3f} {steps_s:12,.0f} {iters:13,d}")
-        if best is None or steps_s > best[1]:
-            best = (n, steps_s, per_iter, iters)
+        rows.append((n, steps_s, per_iter, iters))
 
-    if best is None:
+    if not rows:
         return 1
-    n, steps_s, per_iter, iters = best
+    fastest = max(rows, key=lambda r: r[1])
+    most_iters = max(rows, key=lambda r: r[3])
+    print()
+    print(f"Highest throughput: {fastest[0]} envs at {fastest[1]:,.0f} env-steps/s.")
+    print(f"Most iterations in budget: {most_iters[0]} envs at ~{most_iters[3]:,}.")
+    if fastest[0] != most_iters[0]:
+        print(
+            "These disagree, and the disagreement is the point: a bigger batch buys\n"
+            "more SAMPLES per iteration but fewer ITERATIONS in a fixed wall-clock\n"
+            "budget -- and a curriculum is scheduled in iterations. Prefer the batch\n"
+            "the PPO hyperparameters were tuned at (upstream: 4096) unless you have a\n"
+            "reason to move, and take the iteration count from that row."
+        )
+    # Size the curriculum against the reference batch when it was measured.
+    reference = next((r for r in rows if r[0] == args.reference_envs), fastest)
+    n, steps_s, per_iter, iters = reference
     scale = iters / args.curriculum_iters
     print()
-    print(f"Fastest: {n} envs at {steps_s:,.0f} env-steps/s.")
-    print(f"In {args.budget_minutes:.0f} min that is ~{iters:,} iterations.")
+    print(f"At the reference batch of {n} envs: {steps_s:,.0f} env-steps/s, "
+          f"~{iters:,} iterations in {args.budget_minutes:.0f} min.")
+    print(f"A full {args.curriculum_iters}-iteration run there takes "
+          f"~{args.curriculum_iters * per_iter / 60:.0f} min.")
     if scale >= 1.0:
         print(f"The {args.curriculum_iters}-iteration curriculum fits ({scale:.1f}x headroom). Run it as written.")
     else:
