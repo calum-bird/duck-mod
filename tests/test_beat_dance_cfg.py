@@ -98,16 +98,22 @@ def test_curriculum_stage_zero_matches_the_initial_weight(cfg, curriculum_name, 
 
 
 def test_skills_are_introduced_in_order(cfg):
-    """Bob, then sway, then footfall, then alternation: each stage waits for the
-    previous skill to consolidate rather than all arriving at once."""
+    """Bob, then FOOTFALL, then alternation, then sway. Stepping comes right
+    after the bob exists because it is the stability mechanism, not garnish: a
+    biped marching on the beat catches itself twice a second. Runs 2-3 proved
+    the reverse order trains a both-feet-planted bobber that falls every ~2.4 s
+    (and a fall tax on top of that teaches freezing). The fallen tax must come
+    last of all, only once a step pattern exists to stabilise around."""
 
     def onset(curriculum_name):
         stages = cfg.curriculum[curriculum_name].params["weight_stages"]
         return next(s["step"] for s in stages if s["weight"] != 0.0)
 
     assert cfg.rewards["beat_bob"].weight > 0.0  # active from step 0
-    assert onset("beat_sway_weight") < onset("beat_footfall_weight")
     assert onset("beat_footfall_weight") < onset("foot_alternation_weight")
+    assert onset("foot_alternation_weight") <= onset("beat_sway_weight")
+    assert onset("fallen_tax_weight") > onset("beat_footfall_weight")
+    assert cfg.curriculum["fallen_tax_weight"].params["weight_stages"][-1]["weight"] <= 2.0
 
 
 def test_footfall_weight_reaches_its_designed_reward_mass(cfg):

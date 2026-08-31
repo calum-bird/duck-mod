@@ -49,12 +49,19 @@ from microduck_dance.commands import BeatClockCommand, BeatClockCommandCfg
 NUM_STEPS_PER_ENV = 24
 
 # Curriculum stage boundaries, in PPO iterations.
-# Run 1 introduced sway at 800 while the bob had not consolidated (it was flat
-# at 0.25 and the duck was still falling), which is exactly the pacing error the
-# playbook warns about: do not harden a stage before the current one holds.
-_STAGE_SWAY = 1200
-_STAGE_FOOTFALL = 2000
-_STAGE_ALTERNATION = 2400
+# Ordering, learned the expensive way across three runs. Run 1: sway before the
+# bob consolidated -- statue. Run 2: footfall last and weak -- the duck planted
+# both feet and bobbed, static balance while pumping, and fell every ~2.4 s.
+# Run 3: a fall tax on top of that taught moving LESS (less motion, fewer
+# falls, less tax) while falls still rose. The correction: STEPPING IS THE
+# STABILITY MECHANISM -- a biped that marches on the beat is catching itself
+# twice a second, which is simultaneously the dance and the balance. So
+# footfall now arrives EARLY and strong, right after the bob exists; sway
+# follows (weight shift largely emerges from stepping); the tax stays late and
+# modest, priced only once there is a step pattern to stabilise around.
+_STAGE_FOOTFALL = 1000
+_STAGE_ALTERNATION = 1400
+_STAGE_SWAY = 1600
 _STAGE_TEMPO_WIDE = 3000
 _STAGE_FULL = 3800
 
@@ -71,7 +78,10 @@ MAX_YAW = 0.25
 # as the bob term's 4.0 * ~0.8 = 3.2, which is the comparison that matters to
 # PPO. Weighting it like a dense term (say 4.0) would make it worth 0.1/step
 # and the policy would simply ignore the beat.
-FOOTFALL_WEIGHT = 40.0
+# 40 -> 56 with the reordering: stepping carries the run now, both as the
+# objective and as the balance mechanism, so its reward mass (~1.5/step at 4%
+# duty) must compete with the whole bob stack, not garnish it.
+FOOTFALL_WEIGHT = 56.0
 ALTERNATION_WEIGHT = 20.0
 
 # Walking terms that either read the twist slot as a velocity (and so are
@@ -343,12 +353,15 @@ def make_microduck_beat_dance_env_cfg(
             {"step": _STAGE_TEMPO_WIDE * NUM_STEPS_PER_ENV, "weight": dance_mdp.ENERGY_WEIGHT * 0.25},
         ],
     )
+    # Late and modest after run 3: at 4.0 from iteration 1600 this taught
+    # freezing (peak_height shrank while falls rose). It enters only once the
+    # footfall pattern exists to stabilise around, and never dominates.
     cfg.curriculum["fallen_tax_weight"] = _stage(
         "fallen_tax",
         [
             {"step": 0, "weight": 0.0},
-            {"step": 800 * NUM_STEPS_PER_ENV, "weight": 2.0},
-            {"step": 1600 * NUM_STEPS_PER_ENV, "weight": 4.0},
+            {"step": 2400 * NUM_STEPS_PER_ENV, "weight": 1.0},
+            {"step": 3000 * NUM_STEPS_PER_ENV, "weight": 2.0},
         ],
     )
     cfg.curriculum["beat_sway_power_weight"] = _stage(
