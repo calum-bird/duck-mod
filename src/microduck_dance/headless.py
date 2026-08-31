@@ -36,6 +36,41 @@ MICRODUCK_SCENE = "src/mjlab_microduck/robot/microduck/scene.xml"
 # The viewer runs the policy at 50 Hz over a 4-substep physics tick.
 DECIMATION = 4
 
+# XL330 torque constant (Nm/A) from the BAM m6 fit; used when the bam package
+# is not importable (e.g. the CPU eval box). Kept in sync with
+# bam.load_model("xl330", "m6").kt.value.
+XL330_KT = 0.36601349688984386
+
+
+def condition_model(model, current_limit: float = 1.75) -> None:
+    """Apply the same model surgery upstream's viewer applies before inference.
+
+    Two pieces, both discovered the expensive way — a freshly trained, healthy
+    policy read as fallen-90%-of-the-run through a harness that skipped them:
+
+    1. ``model.opt.timestep = 0.005``. The scene XML's native timestep is
+       0.002, and the 50 Hz control contract is DECIMATION x 0.005. Stepping
+       DECIMATION x native ran the policy at 125 Hz — every action applied
+       2.5x too fast — which turned a clean bob into a crouched, chattering
+       drift. Train/eval disagreement of that size is nearly always the
+       harness, and it was.
+    2. The XL330's ~1.75 A current saturation as a symmetric torque clamp
+       (kt * I). Training's BAM actuator saturates; plain MuJoCo position
+       actuators do not, and unrealistically strong motors change the
+       closed-loop behaviour the policy meets.
+    """
+    model.opt.timestep = 0.005
+    if current_limit and current_limit > 0:
+        try:
+            from bam.model import load_model
+            kt = load_model(motor_name="xl330", model="m6").kt.value
+        except Exception:
+            kt = XL330_KT
+        limit = kt * current_limit
+        model.actuator_forcerange[:, 0] = -limit
+        model.actuator_forcerange[:, 1] = limit
+        model.actuator_forcelimited[:] = 1
+
 
 def rollout(
     policy_onnx: str,
@@ -61,6 +96,7 @@ def rollout(
         raise SystemExit(f"scene not found: {xml}")
 
     model = mujoco.MjModel.from_xml_path(str(xml))
+    condition_model(model)
     data = mujoco.MjData(model)
     # Start from the STAND keyframe when the scene defines one — otherwise the
     # duck begins collapsed at the origin and the first second of every rollout

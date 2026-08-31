@@ -25,7 +25,7 @@ from microduck_dance.dance_driver import (
     load_infer_policy,
     make_dance_inference,
 )
-from microduck_dance.headless import DECIMATION, MICRODUCK_SCENE
+from microduck_dance.headless import DECIMATION, MICRODUCK_SCENE, condition_model
 
 
 def main() -> int:
@@ -52,6 +52,7 @@ def main() -> int:
     infer = load_infer_policy(args.microduck_rl)
     root = Path(args.microduck_rl or os.environ["MICRODUCK_RL"])
     model = mujoco.MjModel.from_xml_path(str(root / MICRODUCK_SCENE))
+    condition_model(model)
     data = mujoco.MjData(model)
     if model.nkey > 0:
         mujoco.mj_resetDataKeyframe(model, data, 0)
