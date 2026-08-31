@@ -1,0 +1,39 @@
+[build-system]
+requires = ["uv_build>=0.8.19,<0.9.0"]
+build-backend = "uv_build"
+
+[project]
+name = "microduck-dance"
+version = "0.1.0"
+description = "Beat-synced dance task for the Microduck, layered on mjlab_microduck"
+readme = "README.md"
+license = "Apache-2.0"
+# Matches mjlab-microduck's window: bam pins requires-python <3.13, and the
+# training job must run the same interpreter as upstream.
+requires-python = ">=3.12, <3.13"
+dependencies = [
+    "mjlab-microduck",
+]
+
+# Upstream is not on PyPI; pull it from git. Pin to a tag or commit before any
+# run you intend to reproduce -- `develop` moves.
+[tool.uv.sources]
+mjlab-microduck = { git = "https://github.com/pollen-robotics/microduck_rl", branch = "develop" }
+
+# How mjlab finds these tasks. Same entry-point group upstream registers under,
+# so `uv run list-envs` and `uv run train` pick them up with no wrapper script.
+[project.scripts]
+# Dry-run the deployment beat clock without a robot or a simulator.
+beat-source = "microduck_dance.beat_source:main"
+
+[project.entry-points."mjlab.tasks"]
+microduck_dance = "microduck_dance.tasks"
+
+[dependency-groups]
+dev = ["pytest>=8.0"]
+
+[tool.uv.build-backend]
+module-root = "src"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
