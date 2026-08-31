@@ -1,0 +1,52 @@
+#!/usr/bin/env bash
+# Run 2 launch + gate procedure, exactly as designed. Runs on the givemeanode
+# node built by setup_node.sh (or restored from snapshot snap-dm756).
+#
+# Cost structure: the first ~12 minutes ARE the pilot. Killing at the gate
+# costs ~$1.30; a full clean run is ~90 min (~$6.00) at 4096 envs.
+set -euo pipefail
+export PATH="$HOME/.local/bin:$PATH"
+
+cd ~/work/duck-mod && git pull -q origin claude/microduck-training-27jcop
+cd ~/work/microduck_rl
+uv pip install -q --no-deps -e ~/work/duck-mod
+uv run list-envs 2>/dev/null | grep -q Dance || { echo "dance tasks missing"; exit 1; }
+
+# CPU-side invariants first: the probe tests fail in seconds if the reward
+# stack regressed; the cfg tests re-check every stage-0 weight on real mjlab.
+uv run --with pytest python -m pytest ~/work/duck-mod/tests/ -q
+
+# WANDB_API_KEY must arrive via the command environment, never this file.
+uv run train Mjlab-BeatDance-Flat-MicroDuck \
+    --env.scene.num-envs 4096 --agent.max_iterations 3800 \
+    > ~/train2.log 2>&1 &
+TRAIN_PID=$!
+echo "training pid $TRAIN_PID; gate at ~500 iterations (~12 min)"
+
+# ---- The gate -------------------------------------------------------------
+# Wait for 500 logged iterations, then judge. KILL conditions, decided before
+# launch so the decision is mechanical:
+#   ABORT  any Episode_Reward/*_penalty positive, or NaN terminations
+#   ABORT  Metrics/peak_height_mean SHRINKING (statue again)
+#   ABORT  Episode_Reward/beat_bob_energy flat near zero at iter 500
+#           (the escape term is not being collected -> no motion)
+#   HOLD   entropy falling fast while energy is flat
+# pilot_check encodes all of these:
+while [ "$(grep -c 'Iteration time' ~/train2.log 2>/dev/null || echo 0)" -lt 500 ]; do
+    kill -0 $TRAIN_PID 2>/dev/null || { echo "trainer died"; tail -30 ~/train2.log; exit 1; }
+    sleep 30
+done
+if python3 ~/work/duck-mod/scripts/pilot_check.py ~/train2.log \
+        --min-iters 400 --objective beat_bob; then
+    echo "GATE: CONTINUE — letting the run finish (~90 min total)"
+    wait $TRAIN_PID
+    CK=$(ls -t wandb/run-*/files/model_*.pt | head -1)
+    uv run scripts/export.py Mjlab-BeatDance-Flat-MicroDuck --checkpoint-file "$CK"
+    echo "exported: output.onnx — eval it on any CPU box:"
+    echo "  MICRODUCK_RL=~/work/microduck_rl python ~/work/duck-mod/scripts/eval_dance.py \\"
+    echo "      --policy output.onnx --bpm 60 90 120 140 160 --seconds 20"
+else
+    echo "GATE: verdict above — killing the run"
+    kill $TRAIN_PID
+    exit 1
+fi
