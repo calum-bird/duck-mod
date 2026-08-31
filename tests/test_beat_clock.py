@@ -74,3 +74,22 @@ def test_sway_completes_one_cycle_per_bar_and_crosses_centre_on_beats():
 def test_stance_side_splits_the_bar_into_two_beats():
     sides = bc.stance_side(torch.tensor([0.0, 0.49, 0.5, 0.99]))
     assert sides.tolist() == [0, 0, 1, 1]
+
+
+def test_bob_payoff_exposes_the_stand_still_loophole():
+    """A tracking Gaussian is partly satisfiable by holding the reference's
+    mean. This is the arithmetic that made run 1 stand rigidly still, and the
+    guard against loosening std back toward the amplitude."""
+    shipped_still, shipped_track = bc.bob_payoff(0.014, 0.010)
+    fixed_still, fixed_track = bc.bob_payoff(0.014, 0.006)
+    # What run 1 actually shipped: doing nothing scored ~47% of maximum.
+    assert 0.45 < shipped_still < 0.50
+    assert shipped_track / shipped_still < 2.0
+    # Tightening std makes stillness a clearly worse deal.
+    assert fixed_still < 0.30
+    assert fixed_track / fixed_still > 2.9
+
+
+def test_bob_payoff_stillness_falls_as_std_tightens():
+    stills = [bc.bob_payoff(0.014, s)[0] for s in (0.010, 0.008, 0.006, 0.004)]
+    assert stills == sorted(stills, reverse=True)

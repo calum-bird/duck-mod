@@ -42,25 +42,27 @@ from mjlab_microduck.tasks.microduck_velocity_env_cfg import (
 )
 
 from microduck_dance import mdp as dance_mdp
-from microduck_dance.beat_clock import BPM_MAX, BPM_MIN
+from microduck_dance.beat_clock import BPM_MAX, BPM_MIN, NOMINAL_HEIGHT
 from microduck_dance.commands import BeatClockCommand, BeatClockCommandCfg
 
 # Rollout length used upstream; curriculum steps are iterations x this.
 NUM_STEPS_PER_ENV = 24
 
 # Curriculum stage boundaries, in PPO iterations.
-_STAGE_SWAY = 800
-_STAGE_FOOTFALL = 1600
-_STAGE_ALTERNATION = 2000
-_STAGE_TEMPO_WIDE = 2600
-_STAGE_FULL = 3400
+# Run 1 introduced sway at 800 while the bob had not consolidated (it was flat
+# at 0.25 and the duck was still falling), which is exactly the pacing error the
+# playbook warns about: do not harden a stage before the current one holds.
+_STAGE_SWAY = 1200
+_STAGE_FOOTFALL = 2000
+_STAGE_ALTERNATION = 2400
+_STAGE_TEMPO_WIDE = 3000
+_STAGE_FULL = 3800
 
 # Choreography envelopes. The duck stands ~0.095 m at the trunk, so a 25 mm bob
 # is a deep one and 20 mm of sway is a full weight commit.
 MAX_BOB = 0.025
 MAX_SWAY = 0.020
 MAX_YAW = 0.25
-NOMINAL_HEIGHT = 0.095
 
 # Reward MASS of the footfall impulse, not its weight. It pays at most once per
 # beat: at 120 BPM that is 2 payouts/s against a 50 Hz control loop, so only 4%
@@ -78,7 +80,6 @@ _WALKING_TERMS = (
     "track_linear_velocity",   # twist is no longer a velocity
     "track_angular_velocity",  # idem
     "air_time",                # rewards LONG swings; the beat sets the cadence
-    "pose",                    # pulls the legs to HOME, i.e. against the bob
 )
 
 
@@ -150,6 +151,26 @@ def make_microduck_beat_dance_env_cfg(
     if "head_pose_bias" in cfg.rewards:
         cfg.rewards["head_pose_bias"].weight = 1.0
 
+    # `pose` was deleted outright in run 1 on the reasoning that a HOME-pull
+    # fights the bob. It does -- but it was also the only thing holding the leg
+    # pitch chain in a sane stance, and without it the duck spent ~47% of every
+    # episode below the gate height. A bob of +-14 mm is a few degrees of knee
+    # and ankle, which a WEAK pull tolerates. So keep it, at 40% weight and
+    # scoped to the legs (neck and head must stay free to oscillate).
+    if "pose" in cfg.rewards:
+        cfg.rewards["pose"].weight *= 0.4
+        for _std_key in ("std_standing", "std_walking", "std_running"):
+            if _std_key in cfg.rewards["pose"].params:
+                _d = cfg.rewards["pose"].params[_std_key]
+                cfg.rewards["pose"].params[_std_key] = {
+                    k: v
+                    for k, v in _d.items()
+                    if "neck" not in k and "head" not in k and "passive" not in k
+                }
+        cfg.rewards["pose"].params["asset_cfg"] = SceneEntityCfg(
+            "robot", joint_names=(r"^(?!passive_|.*neck.*|.*head.*).*",)
+        )
+
     # angular_momentum penalises the full 3D momentum norm, so it opposes the
     # commanded yaw twist. Kept (it damps genuine flailing) but demoted, per
     # the playbook's rule that motion blockers stay low-weight on dynamic tasks.
@@ -171,7 +192,15 @@ def make_microduck_beat_dance_env_cfg(
             "command_name": "twist",
             "body_command_name": "body_pose",
             "nominal_height": NOMINAL_HEIGHT,
-            "std": 0.010,
+            # 0.010 -> 0.006. At 0.010 against a 14 mm amplitude, simply HOLDING
+            # the nominal height scores 0.471 of maximum -- measured, not
+            # guessed -- against 0.914 for tracking well. A 1.94x edge does not
+            # pay for the fall risk that bobbing carries, so run 1 (2026-08-31)
+            # learned to stand rigidly still: beat_bob sat at 0.25, which is
+            # 0.471 x a 53%-open gate almost exactly. At 0.006 the stand-still
+            # payoff drops to 0.257 while good tracking still earns 0.779 -- a
+            # 3.0x edge. See scripts/bob_reward_payoff.py for the table.
+            "std": 0.006,
             **_amp_params,
         },
     )

@@ -48,6 +48,10 @@ import torch
 BPM_MIN = 60.0
 BPM_MAX = 160.0
 
+# Trunk height of the nominal standing stance, metres. Lives here rather than in
+# the env cfg so the reward-payoff arithmetic can be checked without mjlab.
+NOMINAL_HEIGHT = 0.095
+
 # Default timing tolerance for "on the beat", in beat-phase units. At 120 BPM a
 # beat is 500 ms, so sigma=0.08 is a 40 ms tolerance -- the order of human
 # beat-timing accuracy, and tempo-relative by construction.
@@ -141,3 +145,25 @@ def stance_side(bar_phase: torch.Tensor) -> torch.Tensor:
     beat without needing a monotonic beat counter.
     """
     return (bar_phase >= 0.5).long()
+
+
+def bob_payoff(amplitude: float, std: float, lag: float = 0.003) -> tuple[float, float]:
+    """(score for holding nominal height, score for tracking with `lag` error).
+
+    A Gaussian tracking reward against a moving reference is always partly
+    satisfiable by holding that reference's MEAN: the error is then just the
+    reference's own excursion, and if the excursion is small relative to std the
+    free score is high. A policy compares that free score against tracking --
+    which costs effort and risks a fall that zeroes the hard gate -- and picks
+    correctly. So std must be small relative to the AMPLITUDE, not merely "the
+    error we still care about".
+
+    Run 1 (2026-08-31) shipped amplitude 14 mm against std 10 mm: standing still
+    scored 0.471 versus 0.914 for tracking, and the policy duly stood still --
+    the logged beat_bob of 0.25 is 0.471 x a 53%-open gate almost exactly.
+    """
+    phase = torch.linspace(0, 1, 2001)[:-1]
+    ref = bob_reference(phase, torch.tensor(float(amplitude)), NOMINAL_HEIGHT)
+    still = float(torch.exp(-(((NOMINAL_HEIGHT - ref) / std) ** 2)).mean())
+    tracking = math.exp(-((lag / std) ** 2))
+    return still, tracking

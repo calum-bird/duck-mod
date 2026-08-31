@@ -49,7 +49,7 @@ def test_observation_contract_is_still_61_dims(cfg):
 
 def test_walking_reward_terms_are_gone(cfg):
     # These read the twist slot as a velocity, which it no longer is.
-    for name in ("track_linear_velocity", "track_angular_velocity", "air_time", "pose"):
+    for name in ("track_linear_velocity", "track_angular_velocity", "air_time"):
         assert name not in cfg.rewards, name
     # body_pose no longer means a pose target -- it means amplitudes.
     assert "body_pose_tracking" not in cfg.rewards
@@ -136,3 +136,38 @@ def test_curriculum_steps_are_expressed_in_environment_steps(cfg):
     stages = cfg.curriculum["beat_footfall_weight"].params["weight_stages"]
     assert stages[1]["step"] % NUM_STEPS_PER_ENV == 0
     assert stages[1]["step"] >= 1000
+
+
+def test_leg_posture_regulariser_is_kept_but_weakened(cfg):
+    """Run 1 deleted `pose` outright and the duck spent ~47% of each episode
+    below the gate height: it was the only thing holding the leg pitch chain in
+    a sane stance. It is kept now, weak enough not to fight a few degrees of
+    knee and ankle, and scoped off the neck/head so the head stays free."""
+    assert "pose" in cfg.rewards
+    joints = cfg.rewards["pose"].params["asset_cfg"].joint_names
+    assert any("neck" in pattern and "?!" in pattern or "neck" not in pattern
+               for pattern in joints)
+    for std_key in ("std_standing", "std_walking", "std_running"):
+        if std_key in cfg.rewards["pose"].params:
+            for joint in cfg.rewards["pose"].params[std_key]:
+                assert "neck" not in joint and "head" not in joint, joint
+
+
+def test_bob_std_makes_standing_still_a_bad_deal(cfg):
+    """The reward must not be substantially satisfiable by holding the mean.
+
+    Run 1 shipped std=0.010 against a ~14 mm amplitude, where standing still
+    scored 0.471 against 0.914 for tracking -- a 1.94x edge that did not pay for
+    the fall risk, so the policy stood still. Guard the arithmetic, not the
+    number: this fails if a future edit loosens std back toward the amplitude.
+    """
+    from microduck_dance.beat_clock import bob_payoff
+    from microduck_dance.beat_dance_env_cfg import MAX_BOB
+
+    std = cfg.rewards["beat_bob"].params["std"]
+    typical_amp = MAX_BOB * 0.6
+    still, tracking = bob_payoff(typical_amp, std)
+    assert tracking / still >= 2.5, (
+        f"std={std} lets standing still score {still:.3f} against {tracking:.3f} "
+        f"for tracking ({tracking / still:.2f}x) — the policy will stand still"
+    )

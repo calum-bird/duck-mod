@@ -194,6 +194,39 @@ tick and shows up in wandb as a mysterious step change. There is a test for it.
   "Falls off the beat 1 in 4 bars at 150 BPM" is actionable; "the rhythm looks
   off" is not.
 
+## Run 1 (2026-08-31): the duck learned to stand still
+
+The first run of this reward stack failed, in the exact way the table below
+predicts, and the arithmetic is worth keeping.
+
+`beat_bob` sat flat at ~0.25 for 1300 iterations while policy entropy collapsed
+from 11.2 to 1.6 and `peak_height_mean` *shrank*. The duck was standing rigidly
+still and the reward was fine with that.
+
+Why, in numbers (`scripts/bob_reward_payoff.py`): at a 14 mm amplitude against
+`std=0.010`, simply **holding the nominal height scores 0.471** of maximum,
+against 0.914 for tracking well. A 1.94x edge does not pay for the fall risk
+that bobbing carries, and the hard gate zeroes everything on a fall. Standing
+still was the correct play, and PPO found it. The logged 0.25 is 0.471 x a
+53%-open gate almost exactly — the diagnosis reproduces the number.
+
+Three changes followed:
+
+1. **`beat_bob` std 0.010 -> 0.006.** Stillness now scores 0.257 against 0.779
+   for tracking, a 3.0x edge. The rule this taught: a tracking Gaussian's std
+   must be small relative to the **amplitude**, not merely "the error we still
+   care about" — otherwise the reward is satisfiable by holding the mean.
+2. **`pose` restored** at 40% weight, scoped to the legs. Deleting it outright
+   was over-correction: it fights the bob, but it was also the only thing
+   holding the leg pitch chain in a sane stance, and without it the duck was
+   below gate height ~47% of every episode. A few degrees of knee and ankle
+   survive a weak pull.
+3. **Sway moved 800 -> 1200 iterations.** Run 1 hardened stage 2 while stage 1
+   had not consolidated — the pacing error this document already warned about.
+
+These are hypotheses backed by arithmetic, not by a successful run. The payoff
+ratio is now guarded by a test.
+
 ## Known failure modes
 
 | Symptom | Likely cause | Fix |
@@ -220,7 +253,15 @@ tick and shows up in wandb as a mysterious step change. There is a test for it.
    into the ONNX. In-sim play applies the normaliser either way and so hides
    normalisation bugs; a hand-converted checkpoint will look fine in `play` and
    fail on the robot.
-4. **Feed the clock.** Use `microduck_dance.beat_source.BeatCommandSource` on
+4. **Evaluate on CPU.** `scripts/eval_dance.py` needs no GPU and no display —
+   one duck at 50 Hz is a CPU workload. It drives upstream's `PolicyInference`
+   directly rather than its GLFW viewer (which fails on any headless box with
+   "X11: The DISPLAY environment variable is missing", and which `MUJOCO_GL=egl`
+   does not fix, because the problem is the window and not the renderer).
+   Observation assembly is still upstream's own code — reimplementing it is the
+   one shortcut that would quietly invalidate every number.
+
+5. **Feed the clock.** Use `microduck_dance.beat_source.BeatCommandSource` on
    the host — it is dependency-free and produces the same 13 values in the same
    slot order, with the same tempo normalisation (there is a test asserting the
    two encodings agree). Wire its output into your runtime's JSON-RPC command
@@ -231,7 +272,7 @@ tick and shows up in wandb as a mysterious step change. There is a test for it.
    uv run beat-source --bpm 128 --seconds 2   # dry-run the clock, no robot needed
    ```
 
-5. **Sync sparingly.** `BeatCommandSource.sync(0.0)` on a detected downbeat is
+6. **Sync sparingly.** `BeatCommandSource.sync(0.0)` on a detected downbeat is
    for correcting drift, not for driving. The policy was trained on a phase
    that only ever advances smoothly; snapping every beat makes it jitter.
 
