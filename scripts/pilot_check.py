@@ -140,10 +140,17 @@ def main() -> int:
     for key, values in find(series, "fell_over").items():
         first, last = trend(values)
         notes.append(f"{key}: {first:.2f} -> {last:.2f}")
-        # >10% relative: a 3% wobble between windows is sampling noise, and a
-        # gate that kills on noise costs a real run each time it fires.
-        if last > first * 1.10:
+        # Kill-class only when BOTH relative and absolute say trouble: run 4
+        # opened with falls at HALF any previous run's level (15 -> 18 per
+        # window against ~30-35 before) and the pure-relative rule executed
+        # the healthiest start yet for a +17% wiggle. Trends without levels
+        # alarm on the best runs, because the best runs have the most room
+        # to wiggle upward.
+        if last > first * 1.10 and last > 25.0:
             hard_warns.append(f"{key} rising ({first:.2f} -> {last:.2f}) — losing stability")
+        elif last > first * 1.10:
+            warns.append(f"{key} rising ({first:.2f} -> {last:.2f}) but from a low "
+                         f"level — watching, not killing")
 
     # --- WARN: the duck is moving LESS over time -----------------------------
     # A rhythmic task satisfied by standing still is the failure mode a
