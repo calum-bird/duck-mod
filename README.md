@@ -48,10 +48,30 @@ src/microduck_dance/
 ├── mdp.py                 # dance rewards, penalties, curricula
 ├── beat_dance_env_cfg.py  # the env config and its curriculum
 ├── beat_source.py         # host-side clock for deployment — no dependencies
+├── eval.py                # headless dance metrics — pure functions, CPU-testable
+├── dance_driver.py        # drives the policy in MuJoCo; records trajectories
 └── tasks/__init__.py      # mjlab task registration (entry point target)
-tests/                     # reward/kernel tests run on CPU; cfg tests need mjlab
+scripts/
+├── setup_node.sh          # one-command GPU node bootstrap
+├── calibrate_throughput.py# measure env-steps/s, size the curriculum to a budget
+├── play_dance.py          # watch it dance, with live/sweeping tempo
+└── eval_dance.py          # tempo-sweep eval battery
+tests/                     # reward/kernel/eval tests run on CPU; cfg tests need mjlab
 docs/training.md           # the recipe
+docs/gpu-node.md           # running it on a rented H100
 ```
+
+## Measuring whether it actually dances
+
+```bash
+MUJOCO_GL=egl MICRODUCK_RL=~/microduck_rl python scripts/eval_dance.py \
+    --policy beat_dance.onnx --bpm 60 90 120 140 160 --seconds 20
+```
+
+Prints beat-timing error in milliseconds, on-beat fraction, foot-alternation
+rate, drift and fall rate per tempo. Reward curves cannot tell you whether a
+duck is dancing; this can. See [docs/gpu-node.md](docs/gpu-node.md) for the
+node setup and run plan.
 
 ## Tests
 
