@@ -528,3 +528,25 @@ def beat_bob_energy(
     reward = vz.abs().clamp(max=v_peak) / v_peak
     commanded = (bob > 1e-3).float()
     return reward * commanded * dance_gate(env, asset_name)
+
+
+def fallen_tax(
+    env,
+    min_height: float = 0.058,
+    max_tilt_deg: float = 45.0,
+    asset_name: str = "robot",
+) -> torch.Tensor:
+    """-1 per step while genuinely down. Self-negating: weight it POSITIVE.
+
+    Run 2 danced and fell every ~2.4 seconds, and with gamma=0.99 at 50 Hz the
+    return barely sees past 2 seconds — the episode-ending fall was close to
+    free. This prices the fallen state directly. Thresholds are LOOSER than
+    the reward gate's (58 mm / 45 degrees vs 70 mm / 25) so a deep bob or a
+    gait wobble is never taxed; only genuinely being down is. Per the playbook:
+    penalties on bad states are safe — it is positives gated on bad states
+    that get farmed. Ramped in by curriculum only after the escape-from-
+    stillness window, because a fall tax charges clumsy first attempts and
+    would widen the very trap the motion terms exist to break.
+    """
+    return -(1.0 - dance_gate(env, asset_name, min_height=min_height,
+                              max_tilt_deg=max_tilt_deg))

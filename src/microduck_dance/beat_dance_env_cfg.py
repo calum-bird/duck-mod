@@ -158,7 +158,9 @@ def make_microduck_beat_dance_env_cfg(
     # and ankle, which a WEAK pull tolerates. So keep it, at 40% weight and
     # scoped to the legs (neck and head must stay free to oscillate).
     if "pose" in cfg.rewards:
-        cfg.rewards["pose"].weight *= 0.4
+        # 0.4 -> 0.55 after run 2: the duck danced but fell every ~2.4 s, and
+        # stance discipline is the cheapest stability there is.
+        cfg.rewards["pose"].weight *= 0.55
         for _std_key in ("std_standing", "std_walking", "std_running"):
             if _std_key in cfg.rewards["pose"].params:
                 _d = cfg.rewards["pose"].params[_std_key]
@@ -287,6 +289,15 @@ def make_microduck_beat_dance_env_cfg(
     # cost-style (>= 0) and therefore takes a NEGATIVE weight. Scoped to the
     # yaw/roll hips only -- the axes the dance has no business using -- so it
     # never fights the pitch chain doing the bob.
+    # Run 3: price being down, once dancing exists. Stage-0 weight must be 0 —
+    # at stage 1 this tax falls on the clumsy attempts the motion terms are
+    # paying to encourage, and the reward probe shows it would re-widen the
+    # stillness trap if applied from the start.
+    cfg.rewards["fallen_tax"] = RewardTermCfg(
+        func=dance_mdp.fallen_tax,
+        weight=0.0,  # ramped below (must match the curriculum's step-0 value)
+        params={},
+    )
     cfg.rewards["stance_width_penalty"] = RewardTermCfg(
         func=microduck_mdp.joint_deviation_l1,
         weight=-2.0,
@@ -330,6 +341,14 @@ def make_microduck_beat_dance_env_cfg(
             {"step": 0, "weight": dance_mdp.ENERGY_WEIGHT},
             {"step": _STAGE_FOOTFALL * NUM_STEPS_PER_ENV, "weight": dance_mdp.ENERGY_WEIGHT * 0.5},
             {"step": _STAGE_TEMPO_WIDE * NUM_STEPS_PER_ENV, "weight": dance_mdp.ENERGY_WEIGHT * 0.25},
+        ],
+    )
+    cfg.curriculum["fallen_tax_weight"] = _stage(
+        "fallen_tax",
+        [
+            {"step": 0, "weight": 0.0},
+            {"step": 800 * NUM_STEPS_PER_ENV, "weight": 2.0},
+            {"step": 1600 * NUM_STEPS_PER_ENV, "weight": 4.0},
         ],
     )
     cfg.curriculum["beat_sway_power_weight"] = _stage(
@@ -435,8 +454,14 @@ def make_microduck_beat_dance_env_cfg(
 
 
 # Same PPO hyperparameters as the velocity task; only the run identity changes.
+# gamma 0.99 -> 0.995: at 50 Hz, 0.99 is a ~2 s credit horizon — run 2's duck
+# fell every ~2.4 s and was close to indifferent about it, because the fall sat
+# at the edge of what the return could see. 0.995 doubles the horizon to ~4 s.
+# Walking survives 0.99 because a steady gait is a stationary cycle; a
+# station-keeping rhythm task has to care further ahead than it can balance.
 MicroduckBeatDanceRlCfg = dataclasses.replace(
     MicroduckRlCfg,
+    algorithm=dataclasses.replace(MicroduckRlCfg.algorithm, gamma=0.995),
     experiment_name="beat_dance",
     run_name="beat_dance",
 )

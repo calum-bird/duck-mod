@@ -78,6 +78,7 @@ def score(
     weights["beat_bob_power"] = power_weight
     weights["beat_sway_power"] = power_weight * 0.5
     weights["beat_bob_energy"] = energy_weight
+    weights.setdefault("fallen_tax", 0.0)
 
     for i in range(steps):
         phase = (i * dt / bar_period) % 1.0
@@ -112,6 +113,7 @@ def score(
                 "beat_sway": dance_mdp.beat_sway_tracking,
                 "beat_bob_power": dance_mdp.beat_bob_power,
                 "beat_bob_energy": dance_mdp.beat_bob_energy,
+                "fallen_tax": dance_mdp.fallen_tax,
                 "beat_sway_power": dance_mdp.beat_sway_power,
                 "station_keeping_penalty": dance_mdp.station_keeping_penalty,
                 "heading_drift_penalty": dance_mdp.heading_drift_penalty,

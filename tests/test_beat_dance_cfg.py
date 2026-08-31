@@ -85,6 +85,7 @@ def test_head_is_free_to_oscillate(cfg):
         ("beat_bob_weight", "beat_bob"),
         ("beat_bob_energy_weight", "beat_bob_energy"),
         ("beat_sway_power_weight", "beat_sway_power"),
+        ("fallen_tax_weight", "fallen_tax"),
     ],
 )
 def test_curriculum_stage_zero_matches_the_initial_weight(cfg, curriculum_name, reward_name):

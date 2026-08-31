@@ -62,3 +62,16 @@ def test_probe_still_retrodicts_run_one():
     still = _total((0.0, 0.0, 0.0), 0.010, 0.0, 0.0, run1)
     clumsy = _total(CLUMSY, 0.010, 0.0, 0.0, run1)
     assert still - clumsy > 0.5, (still, clumsy)
+
+
+def test_the_fall_tax_does_not_resurrect_the_statue():
+    """The run-3 fallen tax charges exactly the behaviours the motion terms
+    pay to encourage, so it only enters after the escape window. By then the
+    policy is a mediocre dancer, not a statue — and under the stage-2+ weights
+    WITH the full tax, dancing must still beat standing by a wide margin, or
+    the tax has quietly re-opened the trap it was probed against."""
+    stage2 = {"beat_bob": 2.5, "beat_sway": 0.0, "fallen_tax": 4.0,
+              "station_keeping_penalty": 20.0, "heading_drift_penalty": 4.0}
+    still = _total((0.0, 0.0, 0.0), 0.006, POWER_WEIGHT, ENERGY_WEIGHT, stage2)
+    mediocre = _total((0.7, 0.05, 0.25), 0.006, POWER_WEIGHT, ENERGY_WEIGHT, stage2)
+    assert mediocre - still > 0.8, (mediocre, still)
