@@ -54,6 +54,11 @@ def main() -> int:
     model = mujoco.MjModel.from_xml_path(str(root / MICRODUCK_SCENE))
     condition_model(model)
     data = mujoco.MjData(model)
+    # The XML's offscreen framebuffer defaults to 640x480; asking the renderer
+    # for more raises the <visual><global offwidth/> error. Grow it in the
+    # loaded model instead of editing the scene.
+    model.vis.global_.offwidth = max(model.vis.global_.offwidth, args.width)
+    model.vis.global_.offheight = max(model.vis.global_.offheight, args.height)
     key = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_KEY, "STAND")
     if key >= 0:
         mujoco.mj_resetDataKeyframe(model, data, key)
