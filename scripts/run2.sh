@@ -9,15 +9,26 @@ export PATH="$HOME/.local/bin:$PATH"
 
 cd ~/work/duck-mod && git pull -q origin claude/microduck-training-27jcop
 cd ~/work/microduck_rl
+# --no-sync everywhere below: `uv run` otherwise re-syncs the venv to
+# microduck_rl's lockfile, which can STRIP the manually-installed dance
+# package between the install and the command that needs it (observed
+# 2026-08-31: list-envs lost the tasks that were installed one line up).
+uv sync -q
 uv pip install -q --no-deps -e ~/work/duck-mod
-uv run list-envs 2>/dev/null | grep -q Dance || { echo "dance tasks missing"; exit 1; }
+uv run --no-sync list-envs 2>/dev/null | grep -q Dance || {
+    echo "dance tasks missing after install; retrying verbosely"
+    uv pip install --force-reinstall --no-deps -e ~/work/duck-mod
+    uv run --no-sync list-envs 2>&1 | grep -iE "dance|warn|error" | head -5
+    uv run --no-sync list-envs 2>/dev/null | grep -q Dance || { echo "dance tasks missing"; exit 1; }
+}
 
 # CPU-side invariants first: the probe tests fail in seconds if the reward
 # stack regressed; the cfg tests re-check every stage-0 weight on real mjlab.
-uv run --with pytest python -m pytest ~/work/duck-mod/tests/ -q
+uv pip install -q pytest
+uv run --no-sync python -m pytest ~/work/duck-mod/tests/ -q
 
 # WANDB_API_KEY must arrive via the command environment, never this file.
-uv run train Mjlab-BeatDance-Flat-MicroDuck \
+uv run --no-sync train Mjlab-BeatDance-Flat-MicroDuck \
     --env.scene.num-envs 4096 --agent.max_iterations 3800 \
     > ~/train2.log 2>&1 &
 TRAIN_PID=$!
@@ -41,7 +52,7 @@ if python3 ~/work/duck-mod/scripts/pilot_check.py ~/train2.log \
     echo "GATE: CONTINUE — letting the run finish (~90 min total)"
     wait $TRAIN_PID
     CK=$(ls -t wandb/run-*/files/model_*.pt | head -1)
-    uv run scripts/export.py Mjlab-BeatDance-Flat-MicroDuck --checkpoint-file "$CK"
+    uv run --no-sync scripts/export.py Mjlab-BeatDance-Flat-MicroDuck --checkpoint-file "$CK"
     echo "exported: output.onnx — eval it on any CPU box:"
     echo "  MICRODUCK_RL=~/work/microduck_rl python ~/work/duck-mod/scripts/eval_dance.py \\"
     echo "      --policy output.onnx --bpm 60 90 120 140 160 --seconds 20"
