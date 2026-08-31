@@ -5,7 +5,7 @@ import math
 import torch
 
 from microduck_dance import beat_clock as bc
-from tests.conftest import twist_at
+from conftest import twist_at
 
 
 def test_tempo_norm_round_trips_and_clamps():

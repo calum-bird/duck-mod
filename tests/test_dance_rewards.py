@@ -10,7 +10,7 @@ import torch
 
 from microduck_dance import beat_clock as bc
 from microduck_dance import mdp as dance_mdp
-from tests.conftest import StubEnv, amplitudes, twist_at
+from conftest import StubEnv, amplitudes, twist_at
 
 
 # --------------------------------------------------------------------------- #
