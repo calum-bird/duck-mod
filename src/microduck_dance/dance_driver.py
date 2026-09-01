@@ -158,8 +158,10 @@ class TrajectoryRecorder:
         self.root_z: list[float] = []
         self.root_xy: list[tuple[float, float]] = []
         self.root_yaw: list[float] = []
+        self.head_yaw: list[float] = []
 
-    def record(self, phase: float, data, contacts: tuple[bool, bool]) -> None:
+    def record(self, phase: float, data, contacts: tuple[bool, bool],
+               head_yaw: float = 0.0) -> None:
         import math
 
         # A free-joint root: qpos is [x, y, z, qw, qx, qy, qz, ...]. This is
@@ -173,6 +175,7 @@ class TrajectoryRecorder:
         self.root_z.append(z)
         self.root_xy.append((x, y))
         self.root_yaw.append(yaw)
+        self.head_yaw.append(head_yaw)
 
     def to_trajectory(self):
         import torch
@@ -187,6 +190,7 @@ class TrajectoryRecorder:
             root_z=torch.tensor(self.root_z),
             root_xy=torch.tensor(self.root_xy),
             root_yaw=torch.tensor(self.root_yaw),
+            head_yaw=torch.tensor(self.head_yaw),
             commanded_bob=self.bob,
             commanded_sway=self.sway,
         )
@@ -199,6 +203,7 @@ def make_dance_inference(base_cls, controller: BeatController, recorder=None):
         beat = controller
         _recorder = recorder
         _contact_reader = None
+        _head_adr = None
 
         def update_ground_pick_phase(self, dt: float) -> None:
             """Called once per viewer frame with the real dt (upstream loop).
@@ -214,10 +219,16 @@ def make_dance_inference(base_cls, controller: BeatController, recorder=None):
             self.command[7:13] = cmd[7:13]
 
             if self._recorder is not None:
+                import mujoco
+
                 if self._contact_reader is None:
                     self._contact_reader = FootContactReader(self.model)
+                    jid = mujoco.mj_name2id(self.model, mujoco.mjtObj.mjOBJ_JOINT, "head_yaw")
+                    type(self)._head_adr = int(self.model.jnt_qposadr[jid]) if jid >= 0 else None
+                head = float(self.data.qpos[self._head_adr]) if self._head_adr is not None else 0.0
                 self._recorder.record(
-                    self.beat.phase, self.data, self._contact_reader.read(self.data)
+                    self.beat.phase, self.data,
+                    self._contact_reader.read(self.data), head_yaw=head,
                 )
 
     return DanceInference

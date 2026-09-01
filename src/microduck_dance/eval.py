@@ -46,6 +46,7 @@ class Trajectory:
     root_z: torch.Tensor
     root_xy: torch.Tensor
     root_yaw: torch.Tensor
+    head_yaw: torch.Tensor | None = None
     commanded_bob: float = 0.0
     commanded_sway: float = 0.0
 
@@ -73,6 +74,8 @@ class DanceMetrics:
     net_drift_cm: float
     yaw_drift_deg: float
     fall_fraction: float
+    head_swing_amp_rad: float = 0.0
+    head_swing_corr: float = 0.0
     notes: list[str] = field(default_factory=list)
 
 
@@ -212,6 +215,15 @@ def evaluate(traj: Trajectory, on_beat_tolerance_ms: float = 50.0) -> DanceMetri
     if max_drift > 15.0:
         notes.append(f"wandered {max_drift:.0f} cm — station keeping is not holding")
 
+    if traj.head_yaw is not None and traj.head_yaw.numel() > 8:
+        head_amp = _peak_to_peak_amplitude(traj.head_yaw)
+        ref = torch.sin(2 * torch.pi * traj.bar_phase)
+        h = traj.head_yaw - traj.head_yaw.mean()
+        denom = h.std() * ref.std()
+        head_corr = float((h * (ref - ref.mean())).mean() / denom) if denom > 1e-9 else 0.0
+    else:
+        head_amp, head_corr = 0.0, 0.0
+
     bob = _peak_to_peak_amplitude(traj.root_z)
     sway = _peak_to_peak_amplitude(traj.root_xy[:, 1]) if traj.root_xy.shape[0] else 0.0
 
@@ -238,6 +250,8 @@ def evaluate(traj: Trajectory, on_beat_tolerance_ms: float = 50.0) -> DanceMetri
         net_drift_cm=net_drift,
         yaw_drift_deg=yaw_drift_deg(traj.root_yaw),
         fall_fraction=fall,
+        head_swing_amp_rad=head_amp,
+        head_swing_corr=head_corr,
         notes=notes,
     )
 
@@ -246,7 +260,8 @@ def format_report(results: list[DanceMetrics]) -> str:
     """A tempo-sweep table. This is the artifact to paste into a run comparison."""
     header = (
         f"{'BPM':>5} {'strikes':>8} {'|err|ms':>8} {'p90ms':>7} {'jitter':>7} "
-        f"{'on-beat':>8} {'alt':>6} {'/beat':>6} {'bob mm':>7} {'drift cm':>9} {'fall':>6}"
+        f"{'on-beat':>8} {'alt':>6} {'/beat':>6} {'bob mm':>7} {'drift cm':>9} {'fall':>6} "
+        f"{'head rad':>9} {'headcorr':>9}"
     )
     lines = [header, "-" * len(header)]
     for m in results:
@@ -255,7 +270,8 @@ def format_report(results: list[DanceMetrics]) -> str:
             f"{m.timing_p90_abs_ms:7.1f} {m.timing_jitter_ms:7.1f} "
             f"{m.on_beat_fraction:7.0%} {m.alternation_rate:6.2f} "
             f"{m.strikes_per_beat:6.2f} {m.bob_amplitude_mm:7.1f} "
-            f"{m.max_drift_cm:9.1f} {m.fall_fraction:5.0%}"
+            f"{m.max_drift_cm:9.1f} {m.fall_fraction:5.0%} "
+            f"{m.head_swing_amp_rad:9.2f} {m.head_swing_corr:9.2f}"
         )
     notes = {n for m in results for n in m.notes}
     if notes:

@@ -203,3 +203,89 @@ def test_sway_std_is_tight_relative_to_its_amplitude(cfg):
     # The same loophole beat_bob had: at std == amplitude a statue collects
     # 0.645 of the sway term for free.
     assert cfg.rewards["beat_sway"].params["std"] <= 0.008
+
+
+# ---------------------------------------------------------------------------
+# Head-swing fine-tune (resumes run 2's checkpoint)
+# ---------------------------------------------------------------------------
+
+from microduck_dance.beat_dance_env_cfg import (  # noqa: E402
+    MicroduckBeatDanceHeadRlCfg,
+    make_microduck_beat_dance_head_finetune_cfg,
+)
+
+RUN2_FINAL = {
+    "beat_bob": 4.0,
+    "beat_sway": 2.0,
+    "beat_yaw": 0.0,
+    "beat_footfall": 40.0,
+    "foot_alternation_penalty": 20.0,
+    "beat_bob_energy": 0.75,
+    "beat_sway_power": 2.0,
+    "beat_bob_power": 4.0,
+    "fallen_tax": 0.0,
+}
+
+
+@pytest.fixture(scope="module")
+def head_cfg():
+    return make_microduck_beat_dance_head_finetune_cfg()
+
+
+def test_head_finetune_freezes_run2_end_state(head_cfg):
+    """Resume may or may not restore the curriculum step counter; the config is
+    only counter-proof if run 2's schedules are baked in as static weights and
+    the schedules themselves are gone."""
+    for name, weight in RUN2_FINAL.items():
+        assert head_cfg.rewards[name].weight == weight, name
+    for name in (
+        "beat_bob_weight", "beat_sway_weight", "beat_yaw_weight",
+        "beat_footfall_weight", "foot_alternation_weight",
+        "beat_bob_energy_weight", "beat_sway_power_weight",
+        "fallen_tax_weight", "beat_tempo_range", "beat_tempo_change_prob",
+        "dance_amplitude_range",
+    ):
+        assert name not in head_cfg.curriculum, name
+
+
+def test_head_ramp_is_the_only_curriculum_and_starts_at_zero(head_cfg):
+    stages = head_cfg.curriculum["head_yaw_power_weight"].params["weight_stages"]
+    assert stages[0]["step"] == 0
+    assert stages[0]["weight"] == head_cfg.rewards["head_yaw_power"].weight == 0.0
+    from microduck_dance import mdp as dmdp
+
+    assert stages[-1]["weight"] == dmdp.HEAD_POWER_WEIGHT
+    for s in stages:
+        assert s["step"] % NUM_STEPS_PER_ENV == 0
+
+
+def test_head_finetune_keeps_the_61_dim_contract(head_cfg):
+    """Same network in, same network out: the checkpoint can only load if no
+    observation or command slot changed width."""
+    for group in ("actor", "critic"):
+        terms = head_cfg.observations[group].terms
+        assert "head_command" in terms
+        assert "body_command" in terms
+    assert len(head_cfg.commands["body_pose"].ranges) == 6
+
+
+def test_head_finetune_practises_inside_run2s_envelope(head_cfg):
+    lo, hi = head_cfg.commands["twist"].bpm_range
+    assert (lo, hi) == (100.0, 140.0)  # brackets the 127 BPM demo
+    ranges = head_cfg.commands["body_pose"].ranges
+    assert ranges[2][0] > 0.0  # bob never commanded to zero: keep stepping alive
+    assert ranges[2][1] <= 0.022  # ... and never past run 2's proven fall line
+
+
+def test_head_rl_cfg_keeps_run2s_discount():
+    """The resumed critic learned returns under gamma=0.99; retargeting it to
+    0.995 floods early updates with value error masquerading as advantage."""
+    assert MicroduckBeatDanceHeadRlCfg.algorithm.gamma == 0.99
+    assert MicroduckBeatDanceHeadRlCfg.experiment_name == "beat_dance_head"
+    assert MicroduckBeatDanceHeadRlCfg.max_iterations >= 800
+
+
+def test_head_finetune_play_cfg_pins_the_demo_tempo():
+    play = make_microduck_beat_dance_head_finetune_cfg(play=True)
+    assert play.commands["twist"].bpm_range == (127.0, 127.0)
+    assert play.commands["twist"].tempo_change_prob == 0.0

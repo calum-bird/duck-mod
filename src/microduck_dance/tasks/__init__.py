@@ -12,8 +12,10 @@ from mjlab_microduck.tasks import MicroduckOnPolicyRunner
 from mjlab_microduck.tasks.backlash import make_backlash_variant
 
 from microduck_dance.beat_dance_env_cfg import (
+    MicroduckBeatDanceHeadRlCfg,
     MicroduckBeatDanceRlCfg,
     make_microduck_beat_dance_env_cfg,
+    make_microduck_beat_dance_head_finetune_cfg,
 )
 
 register_mjlab_task(
@@ -38,5 +40,15 @@ register_mjlab_task(
         make_microduck_beat_dance_env_cfg(play=True), MICRODUCK_WALK_BACKLASH_ROBOT_CFG
     ),
     rl_cfg=MicroduckBeatDanceRlCfg,
+    runner_cls=MicroduckOnPolicyRunner,
+)
+
+# Head-swing fine-tune: flattened run-2 end-state weights plus one new term.
+# Trained by RESUMING run 2's checkpoint, never from scratch.
+register_mjlab_task(
+    task_id="Mjlab-BeatDanceHead-Flat-MicroDuck",
+    env_cfg=make_microduck_beat_dance_head_finetune_cfg(),
+    play_env_cfg=make_microduck_beat_dance_head_finetune_cfg(play=True),
+    rl_cfg=MicroduckBeatDanceHeadRlCfg,
     runner_cls=MicroduckOnPolicyRunner,
 )

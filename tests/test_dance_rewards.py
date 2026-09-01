@@ -397,3 +397,28 @@ def test_sway_power_measures_along_the_trunk_lateral_axis():
     vp = 0.012 * 2 * math.pi * (120.0 / 120.0)
     e.set_lin_vel(torch.tensor([[-vp, 0.0, 0.0]]))
     assert torch.allclose(dance_mdp.beat_sway_power(e), torch.ones(1), atol=1e-3)
+
+
+def test_head_power_pays_stillness_exactly_zero():
+    e = _motion_env(0.0)
+    assert torch.all(dance_mdp.head_yaw_power(e) == 0.0)
+
+
+def test_head_power_rewards_swinging_with_the_bar_and_charges_against():
+    # bar_phase 0 -> the sweep reference velocity is at +peak.
+    e = _motion_env(0.0)
+    vp = dance_mdp.HEAD_SWING_AMP * 2 * math.pi * (120.0 / 120.0)
+    e.set_joint_vel(e._head_pose_neck_ids[2], vp)
+    with_bar = dance_mdp.head_yaw_power(e)
+    e.set_joint_vel(e._head_pose_neck_ids[2], -vp)
+    against = dance_mdp.head_yaw_power(e)
+    assert torch.allclose(with_bar, torch.ones(1), atol=1e-4)
+    assert torch.allclose(against, -torch.ones(1), atol=1e-4)
+
+
+def test_head_power_is_gated_and_capped():
+    e = _motion_env(0.0)
+    e.set_joint_vel(e._head_pose_neck_ids[2], 50.0)   # servo-impossible spike
+    assert float(dance_mdp.head_yaw_power(e)) <= 2.0 + 1e-6
+    e.set_tilt(60.0)
+    assert torch.all(dance_mdp.head_yaw_power(e) == 0.0)

@@ -550,3 +550,64 @@ def fallen_tax(
     """
     return -(1.0 - dance_gate(env, asset_name, min_height=min_height,
                               max_tilt_deg=max_tilt_deg))
+
+
+# Fixed head-swing choreography: one full left-right head sweep per bar,
+# oscillating around whatever attitude the head_pose command holds. Constant
+# rather than commanded to keep the fine-tune minimal; the runtime test that
+# motivated this showed full-range head motion at these speeds costs nothing
+# in stability, so the reference is not asking for anything dangerous.
+HEAD_SWING_AMP = 0.35  # rad of head_yaw
+HEAD_POWER_WEIGHT = 3.0
+
+
+def _neck_joint_ids(env):
+    """The four neck/head joint indices in command order, cached on the env.
+
+    Resolved by upstream's own head_pose_tracking (its documented side effect)
+    so the ordering can never drift from the code that defines it. The lazy
+    import keeps this module importable with only torch; the test stub simply
+    pre-sets the cache.
+    """
+    ids = getattr(env, "_head_pose_neck_ids", None)
+    if ids is None:
+        from mjlab_microduck.tasks import mdp as _upstream
+        _upstream.head_pose_tracking(env)
+        ids = env._head_pose_neck_ids
+    return ids
+
+
+def head_yaw_power(
+    env,
+    command_name: str = "twist",
+    amplitude: float = HEAD_SWING_AMP,
+    asset_name: str = "robot",
+) -> torch.Tensor:
+    """Pay head-yaw JOINT velocity in phase with a per-bar side-to-side sweep.
+
+    Same zero-for-stillness correlation shape as beat_bob_power, on the head:
+    ref = A*sin(2*pi*phi) per bar, so ref velocity = A*2*pi*(bpm/120)*
+    cos(2*pi*phi). A motionless head earns exactly zero, a swing with the bar
+    pays, a swing against it is charged, and a contact spike cannot mint
+    reward (velocity clipped at 2x the reference peak).
+
+    Why a trained term at all: the command channel was measured to have no
+    phase authority (the policy tracks head commands on a ~1 s average by
+    upstream design), so runtime choreography moves the head the right AMOUNT
+    on the wrong schedule. Phase lock has to be learned.
+
+    The swing oscillates around the commanded attitude, so it cancels in
+    head_pose_bias's 1 s EMA and the two terms do not fight.
+    """
+    cmd = env.command_manager.get_command(command_name)
+    phase = beat_clock.bar_phase_from_command(cmd)
+    bpm = beat_clock.norm_to_tempo(cmd[:, 2])
+    v_ref = beat_clock.sway_velocity_reference(
+        phase, torch.tensor(amplitude, device=phase.device), bpm
+    )
+    v_peak = (torch.tensor(amplitude, device=phase.device)
+              * beat_clock.TWO_PI * (bpm / 120.0))
+    asset = env.scene[asset_name]
+    yaw_id = _neck_joint_ids(env)[2]
+    v = torch.nan_to_num(asset.data.joint_vel[:, yaw_id], nan=0.0)
+    return _power_reward(v, v_ref, v_peak) * dance_gate(env, asset_name)

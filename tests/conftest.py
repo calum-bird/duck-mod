@@ -20,6 +20,8 @@ class _Data:
         self.root_link_pos_w = pos
         self.root_link_quat_w = quat
         self.root_link_lin_vel_w = torch.zeros_like(pos)
+        self.joint_pos = torch.zeros(pos.shape[0], 14)
+        self.joint_vel = torch.zeros(pos.shape[0], 14)
 
 
 class _Asset:
@@ -95,6 +97,9 @@ class StubEnv:
             {"feet_ground_contact": _Sensor(contacts)},
         )
         self.command_manager = _CommandManager(commands or {})
+        # Neck/head joint cache in command order, as upstream resolves it:
+        # [neck_pitch, head_pitch, head_yaw, head_roll]
+        self._head_pose_neck_ids = [5, 6, 7, 8]
 
     def set_yaw(self, yaw, pos=None):
         if pos is None:
@@ -104,10 +109,12 @@ class StubEnv:
         quat = torch.zeros(n, 4)
         quat[:, 0] = torch.cos(yaw_t / 2)
         quat[:, 3] = torch.sin(yaw_t / 2)
-        old_vel = getattr(self, "_asset", None)
+        old = getattr(self, "_asset", None)
         self._asset = _Asset(pos, quat)
-        if old_vel is not None:
-            self._asset.data.root_link_lin_vel_w = old_vel.data.root_link_lin_vel_w
+        if old is not None:
+            self._asset.data.root_link_lin_vel_w = old.data.root_link_lin_vel_w
+            self._asset.data.joint_pos = old.data.joint_pos
+            self._asset.data.joint_vel = old.data.joint_vel
         if hasattr(self, "scene"):
             self.scene._asset = self._asset
 
@@ -125,6 +132,9 @@ class StubEnv:
 
     def set_xy(self, xy: torch.Tensor):
         self._asset.data.root_link_pos_w[:, :2] = xy
+
+    def set_joint_vel(self, idx: int, value: float):
+        self._asset.data.joint_vel[:, idx] = value
 
     def set_lin_vel(self, vel: torch.Tensor):
         self._asset.data.root_link_lin_vel_w[:] = vel

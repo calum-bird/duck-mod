@@ -478,3 +478,86 @@ MicroduckBeatDanceRlCfg = dataclasses.replace(
     experiment_name="beat_dance",
     run_name="beat_dance",
 )
+
+
+def make_microduck_beat_dance_head_finetune_cfg(play: bool = False) -> ManagerBasedRlEnvCfg:
+    """Head-swing fine-tune: resume run 2's checkpoint, add one skill.
+
+    Every schedule is FLATTENED to run 2's actual end state, so this config is
+    correct whether resume restores the curriculum step counter or resets it —
+    the counter has nothing left to move. Values are what run 2 finished
+    with, not what its config aspired to (beat_yaw's ramp began on the final
+    iteration, so it trained at 0 and stays 0 here; the fallen tax post-dates
+    run 2 and stays off; the tempo band is the (100, 140) it actually
+    practised, which brackets the 127 BPM demo).
+
+    The only moving part is head_yaw_power, ramped over the first 600
+    iterations so the warm policy is never yanked.
+    """
+    cfg = make_microduck_beat_dance_env_cfg(play=play)
+
+    run2_final = {
+        "beat_bob": 4.0,
+        "beat_sway": 2.0,
+        "beat_yaw": 0.0,
+        "beat_footfall": 40.0,
+        "foot_alternation_penalty": 20.0,
+        "beat_bob_energy": 0.75,
+        "beat_sway_power": 2.0,
+        "beat_bob_power": dance_mdp.POWER_WEIGHT,
+        "fallen_tax": 0.0,
+    }
+    for name, weight in run2_final.items():
+        if name in cfg.rewards:
+            cfg.rewards[name].weight = weight
+
+    for name in (
+        "beat_bob_weight", "beat_sway_weight", "beat_yaw_weight",
+        "beat_footfall_weight", "foot_alternation_weight",
+        "beat_bob_energy_weight", "beat_sway_power_weight",
+        "fallen_tax_weight", "beat_tempo_range", "beat_tempo_change_prob",
+        "dance_amplitude_range",
+    ):
+        cfg.curriculum.pop(name, None)
+
+    cfg.commands["twist"].bpm_range = (100.0, 140.0)
+    cfg.commands["twist"].tempo_change_prob = 0.1
+    cfg.commands["body_pose"].ranges = (
+        (0.0, 0.0), (0.006, 0.018), (0.008, 0.022),
+        (0.0, 0.0), (0.0, 0.0), (0.05, 0.20),
+    )
+
+    cfg.rewards["head_yaw_power"] = RewardTermCfg(
+        func=dance_mdp.head_yaw_power,
+        weight=0.0,  # ramped below (stage-0 must match)
+        params={"command_name": "twist"},
+    )
+    cfg.curriculum["head_yaw_power_weight"] = CurriculumTermCfg(
+        func=microduck_mdp.reward_weight,
+        params={
+            "reward_name": "head_yaw_power",
+            "weight_stages": [
+                {"step": 0, "weight": 0.0},
+                {"step": 300 * NUM_STEPS_PER_ENV, "weight": dance_mdp.HEAD_POWER_WEIGHT * 0.5},
+                {"step": 600 * NUM_STEPS_PER_ENV, "weight": dance_mdp.HEAD_POWER_WEIGHT},
+            ],
+        },
+    )
+
+    if play:
+        cfg.commands["twist"].bpm_range = (127.0, 127.0)
+        cfg.commands["twist"].tempo_change_prob = 0.0
+    return cfg
+
+
+# gamma stays at run 2's 0.99: the resumed critic learned returns under that
+# discount, and handing it 0.995-scale targets would flood early updates with
+# value error masquerading as advantage. max_iterations sized to the ramp plus
+# consolidation; the run-2 optimum should never be far away.
+MicroduckBeatDanceHeadRlCfg = dataclasses.replace(
+    MicroduckRlCfg,
+    algorithm=dataclasses.replace(MicroduckRlCfg.algorithm, gamma=0.99),
+    experiment_name="beat_dance_head",
+    run_name="beat_dance_head",
+    max_iterations=1200,
+)
