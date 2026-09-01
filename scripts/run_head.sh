@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Head-swing fine-tune launch + gate. Resumes run 2's model_3800.pt into the
+# Head-swing fine-tune launch + gate. Resumes run 2's model_3799.pt into the
 # Mjlab-BeatDanceHead task (flattened curriculum + head_yaw_power ramp).
 #
 # Resume mechanics (mjlab 1.3.0 scripts/train.py + utils/os.get_checkpoint_path):
@@ -7,7 +7,7 @@
 #   <load_checkpoint regex>. experiment_name "beat_dance_head" is a FRESH dir,
 #   so the run-2 checkpoint is PLANTED under it first and targeted explicitly.
 #   runner.load restores model + optimizer + iteration counter (logging resumes
-#   at 3800); the env's common_step_counter starts at 0, which is exactly what
+#   at 3799); the env's common_step_counter starts at 0, which is exactly what
 #   the head ramp is keyed to and why every other schedule was flattened.
 #
 # Cost: gate at ~500 iters (~12 min, ~$1); full 1200 iters ~28 min (~$1.90).
@@ -15,7 +15,7 @@ set -euo pipefail
 export PATH="$HOME/.local/bin:$PATH"
 
 RUN2_SHA=325e3410ba38fe18afb859dcbd2b4854bc4c5573473cd175ae9b5d7b32ee52d9
-CANONICAL=~/work/microduck_rl/wandb/run-20260831_053914-e2d0qy6l/files/model_3800.pt
+CANONICAL=~/work/microduck_rl/logs/rsl_rl/beat_dance/2026-08-31_08-36-40_beat_dance/model_3799.pt
 
 cd ~/work/duck-mod && git pull -q origin claude/microduck-training-27jcop
 cd ~/work/microduck_rl
@@ -36,22 +36,22 @@ uv run --no-sync python -m pytest ~/work/duck-mod/tests/ -q
 # ---- Plant the run-2 checkpoint under the fresh experiment dir -------------
 SEED_DIR=logs/rsl_rl/beat_dance_head/zz_run2_seed
 mkdir -p "$SEED_DIR"
-if [ ! -f "$SEED_DIR/model_3800.pt" ]; then
+if [ ! -f "$SEED_DIR/model_3799.pt" ]; then
     SRC=""
     for c in "$CANONICAL" /tmp/serve/run2_model.pt; do
         [ -f "$c" ] && SRC="$c" && break
     done
     [ -n "$SRC" ] || { echo "run-2 checkpoint not found on this node"; exit 1; }
-    cp "$SRC" "$SEED_DIR/model_3800.pt"
+    cp "$SRC" "$SEED_DIR/model_3799.pt"
 fi
-echo "$RUN2_SHA  $SEED_DIR/model_3800.pt" | sha256sum -c - || {
+echo "$RUN2_SHA  $SEED_DIR/model_3799.pt" | sha256sum -c - || {
     echo "checkpoint hash mismatch — wrong file, refusing to fine-tune it"; exit 1; }
 
 # ---- Smoke: prove the checkpoint loads into the new task (~1 min, CPU-ish) -
 WANDB_MODE=disabled uv run --no-sync train Mjlab-BeatDanceHead-Flat-MicroDuck \
     --env.scene.num-envs 512 --agent.max_iterations 3 \
     --agent.resume True --agent.load_run zz_run2_seed \
-    --agent.load_checkpoint model_3800.pt > ~/smoke_head.log 2>&1 || {
+    --agent.load_checkpoint model_3799.pt > ~/smoke_head.log 2>&1 || {
     echo "SMOKE FAILED"; tail -40 ~/smoke_head.log; exit 1; }
 grep -q "Loading model checkpoint from" ~/smoke_head.log || {
     echo "smoke ran but never loaded the checkpoint"; tail -40 ~/smoke_head.log; exit 1; }
@@ -63,7 +63,7 @@ rm -rf logs/rsl_rl/beat_dance_head/2*  # scrub smoke run dirs so resume regexes 
 uv run --no-sync train Mjlab-BeatDanceHead-Flat-MicroDuck \
     --env.scene.num-envs 4096 --agent.max_iterations 1200 \
     --agent.resume True --agent.load_run zz_run2_seed \
-    --agent.load_checkpoint model_3800.pt \
+    --agent.load_checkpoint model_3799.pt \
     > ~/train_head.log 2>&1 &
 TRAIN_PID=$!
 echo "training pid $TRAIN_PID; gate at ~500 iterations"
@@ -130,9 +130,8 @@ EOF
 
 echo "GATE: CONTINUE — letting the fine-tune finish (~28 min total)"
 wait $TRAIN_PID
-CK=$(ls -t logs/rsl_rl/beat_dance_head/2*/model_*.pt 2>/dev/null | sort -t_ -k2 -n | tail -n 1 || true)
-[ -n "$CK" ] || CK=$(ls -t wandb/run-*/files/model_*.pt 2>/dev/null | head -n 1 || true)
-[ -n "$CK" ] || { echo "no checkpoint found"; exit 1; }
+CK=$(ls logs/rsl_rl/beat_dance_head/2*/model_*.pt 2>/dev/null | sort -V | tail -n 1 || true)
+[ -n "$CK" ] || { echo "no checkpoint found under beat_dance_head"; exit 1; }
 echo "final checkpoint: $CK"
 uv run --no-sync scripts/export.py Mjlab-BeatDanceHead-Flat-MicroDuck --checkpoint-file "$CK"
 echo "EXPORT_OK output.onnx"
