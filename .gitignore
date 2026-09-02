@@ -8,3 +8,7 @@ outputs/
 wandb/
 *.onnx
 *.pt
+
+# The webapp SHIPS its policies — unignore them (the *.onnx rule above
+# is for training exports, and it silently ate the webapp's policy files).
+!webapp/public/policies/*.onnx
