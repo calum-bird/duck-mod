@@ -76,6 +76,7 @@ class BeatController:
         sweep_to: float | None = None,
         sweep_seconds: float = 60.0,
         bpm_file: str | None = None,
+        on_start=None,
     ):
         self.source = BeatCommandSource(bpm=bpm, bob=bob, sway=sway, yaw=yaw)
         self._bpm_start = bpm
@@ -83,6 +84,11 @@ class BeatController:
         self._sweep_seconds = max(sweep_seconds, 1e-6)
         self._bpm_file = bpm_file
         self._elapsed = 0.0
+        # Fires on the FIRST advance(), i.e. when the sim loop actually starts
+        # stepping — not at construction, which is separated from the first
+        # frame by seconds of model loading. This is the only moment that can
+        # start external audio in time with the clock's beat 1.
+        self._on_start = on_start
 
     @property
     def bpm(self) -> float:
@@ -111,6 +117,9 @@ class BeatController:
             pass
 
     def advance(self, dt: float) -> list[float]:
+        if self._on_start is not None:
+            cb, self._on_start = self._on_start, None
+            cb()
         self._elapsed += dt
         if self._sweep_to is not None:
             frac = min(self._elapsed / self._sweep_seconds, 1.0)

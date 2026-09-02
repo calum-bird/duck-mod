@@ -43,7 +43,20 @@ def main() -> int:
     p.add_argument("--audio", default=None, help="track to mux (mp3/wav)")
     p.add_argument("--audio-offset", type=float, default=0.0,
                    help="seconds into the audio where its first downbeat falls")
+    p.add_argument("--song", default=None,
+                   help="audio file to dance to: measures its tempo and first "
+                        "downbeat itself (overrides --bpm/--audio/--audio-offset)")
     args = p.parse_args()
+
+    if args.song:
+        import song_sync
+
+        bpm, steadiness, offset = song_sync.analyze(args.song)
+        args.bpm, note = song_sync.choose_drive_bpm(bpm)
+        args.audio, args.audio_offset = args.song, offset
+        print(f"song: {bpm:.1f} BPM, beat 1 at {offset:.3f}s, steadiness {steadiness:.1f}")
+        if note:
+            print(note)
 
     import imageio_ffmpeg
     import mujoco
@@ -103,7 +116,7 @@ def main() -> int:
         # Shift the track so its first downbeat hits t=0, where the clock's
         # beat 1 is; pad video length wins (-shortest).
         subprocess.run([
-            "ffmpeg", "-y", "-loglevel", "error",
+            imageio_ffmpeg.get_ffmpeg_exe(), "-y", "-loglevel", "error",
             "-i", raw, "-ss", str(args.audio_offset), "-i", args.audio,
             "-map", "0:v", "-map", "1:a",
             "-c:v", "copy", "-c:a", "aac", "-b:a", "160k", "-shortest",

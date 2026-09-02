@@ -4,6 +4,9 @@
     MICRODUCK_RL=~/microduck_rl python scripts/play_dance.py \
         --policy beat_dance.onnx --bpm 128
 
+    # dance to a song, with the song playing (afplay/ffplay), beat-aligned
+    ... --policy beat_dance.onnx --song mysong.wav
+
     # sweep 60 -> 160 BPM over 90 s: shows exactly where tempo lock lets go
     ... --policy beat_dance.onnx --bpm 60 --sweep-to 160 --sweep-seconds 90
 
@@ -14,12 +17,17 @@
 The dance policy is loaded into upstream's always-on "walking" slot and
 --new-cmd-obs is forced, because this task uses the 13-wide command layout.
 Upstream's own key bindings still work for the head and the camera.
+
+On macOS run this with mjpython (ships with the mujoco package) — the
+interactive viewer requires it there.
 """
 
 from __future__ import annotations
 
 import argparse
+import os
 import sys
+from pathlib import Path
 
 from microduck_dance.dance_driver import (
     BeatController,
@@ -33,6 +41,9 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--policy", required=True, help="dance policy ONNX")
     p.add_argument("--microduck-rl", default=None, help="microduck_rl checkout (or set MICRODUCK_RL)")
     p.add_argument("--bpm", type=float, default=120.0)
+    p.add_argument("--song", default=None,
+                   help="audio file to dance to: measures its tempo, plays it "
+                        "beat-aligned while the viewer runs (overrides --bpm)")
     p.add_argument("--sweep-to", type=float, default=None, help="ramp to this BPM")
     p.add_argument("--sweep-seconds", type=float, default=60.0)
     p.add_argument("--bpm-file", default=None, help="poll this file for live tempo")
@@ -45,6 +56,21 @@ def build_parser() -> argparse.ArgumentParser:
 def main() -> int:
     args, passthrough = build_parser().parse_known_args()
 
+    on_start = None
+    if args.song:
+        import song_sync
+
+        song = str(Path(args.song).expanduser().resolve())
+        bpm, steadiness, offset = song_sync.analyze(song)
+        args.bpm, note = song_sync.choose_drive_bpm(bpm)
+        print(f"song: {bpm:.1f} BPM, beat 1 at {offset:.3f}s, steadiness {steadiness:.1f}")
+        if note:
+            print(note)
+        playback = song_sync.trimmed_for_playback(song, offset)
+        # Fired by the controller on its first tick — the moment the sim loop
+        # actually starts stepping, seconds after model loading.
+        on_start = lambda: song_sync.spawn_player(playback)  # noqa: E731
+
     infer = load_infer_policy(args.microduck_rl)
     controller = BeatController(
         bpm=args.bpm,
@@ -54,13 +80,21 @@ def main() -> int:
         sweep_to=args.sweep_to,
         sweep_seconds=args.sweep_seconds,
         bpm_file=args.bpm_file,
+        on_start=on_start,
     )
     # main() looks the class up by module global, so rebinding installs ours.
     infer.PolicyInference = make_dance_inference(infer.PolicyInference, controller)
 
+    # Upstream opens its scene.xml by a path relative to the microduck_rl
+    # checkout, so run from there — with the policy path made absolute first,
+    # or a relative --policy silently breaks under the chdir.
+    policy = str(Path(args.policy).expanduser().resolve())
+    root = Path(args.microduck_rl or os.environ["MICRODUCK_RL"]).expanduser()
+    os.chdir(root)
+
     sys.argv = [
         "infer_policy.py",
-        "--walking", args.policy,
+        "--walking", policy,
         "--new-cmd-obs",
         *passthrough,
     ]
