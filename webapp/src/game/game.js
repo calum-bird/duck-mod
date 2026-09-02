@@ -43,6 +43,7 @@ import {
   VARIANTS, materialHookFor, DEFAULT_VARIANT, applyVariant,
 } from "./variants.js";
 import { createDancePlayer, DANCE_BOB, DANCE_SWAY, DANCE_YAW } from "./dance.js";
+import { createCrowd } from "./crowd.js";
 import { Controller } from "./controls/controller.js";
 import { KeyboardSource } from "./controls/keyboard.js";
 import { GamepadSource } from "./controls/gamepad.js";
@@ -398,6 +399,9 @@ async function boot({ scene, camera, renderer }) {
   const dancer = createDancePlayer();
   let danceIdleSteps = 0;
   const DANCE_IDLE_STEPS = 25; // 0.5 s of no input before dancing resumes
+  // Assigned once the render rig resolves (the 50 Hz loop starts earlier,
+  // so every use below is optional-chained).
+  let crowd = null;
   const isKick = () => mode === "kickL" || mode === "kickR";
 
   // HEAD mode (runtime-faithful, pad Y): locomotion is zeroed and both
@@ -721,6 +725,7 @@ async function boot({ scene, camera, renderer }) {
       applyGrabForce(); // mouse perturbation, fresh velocity every substep
       mujoco.mj_step(model, data);
     }
+    crowd?.record(data.qpos, qposAdr, jawOpenNow());
 
     const death = poseIsDead();
     if (death === "exploded") {
@@ -938,6 +943,14 @@ async function boot({ scene, camera, renderer }) {
   let rig = await rigPromise;
   scene.add(rig.placer);
   let trunkGroup = rig.bodies.get("trunk_base");
+  // Backup dancers: kinematic clones replaying the lead's motion at
+  // whole-bar delays while music plays (see crowd.js). Zero extra physics.
+  crowd = createCrowd({
+    scene, getRig: () => locos.legs.rig, cloneRig, setJoint, setJawOpen,
+    applyVariant, jointNames: JOINT_NAMES,
+    variantNames: Object.keys(VARIANTS), ctrlDt: CTRL_DT,
+  });
+  crowd.setCount(store().crowdCount ?? 6);
   locos.legs = {
     model, data, rig, trunkGroup,
     qposAdr, dofAdr, gyroAdr, trunkId, standKeyId, ballQposAdr, ballDofAdr, extraJoints,
@@ -1598,6 +1611,7 @@ async function boot({ scene, camera, renderer }) {
     }
     syncRig();
     syncJaw();
+    if (dancer.playing && dancer.info) crowd?.update(120 / dancer.info.driveBpm);
     ghosts?.update();
     controls.update();
     updateChaseCam();
@@ -1793,7 +1807,7 @@ async function boot({ scene, camera, renderer }) {
     return dancePromise;
   };
   const setDanceStore = (d) => setStore({ dance: { ...store().dance, ...d } });
-  dancer.onEnded = () => setDanceStore({ state: "idle" });
+  dancer.onEnded = () => { crowd?.setActive(false); setDanceStore({ state: "idle" }); };
 
   async function startDance(file) {
     try {
@@ -1803,6 +1817,7 @@ async function boot({ scene, camera, renderer }) {
       if (prep.note) notes.push(prep.note);
       if (prep.steadiness < 3.0) notes.push("unsteady pulse — the duck may drift off the beat");
       dancer.play(prep);
+      crowd?.setActive(true);
       setDanceStore({
         state: "playing", title: prep.title,
         bpm: prep.bpm, driveBpm: prep.driveBpm,
@@ -1817,7 +1832,13 @@ async function boot({ scene, camera, renderer }) {
 
   function stopDance() {
     dancer.stop();
+    crowd?.setActive(false);
     setDanceStore({ state: "idle" });
+  }
+
+  function setCrowd(n) {
+    crowd?.setCount(n);
+    setStore({ crowdCount: crowd ? crowd.count : n });
   }
 
   // ── Public surface for the React UI ──────────────────────────────────
@@ -1825,6 +1846,7 @@ async function boot({ scene, camera, renderer }) {
     frame,
     startDance,
     stopDance,
+    setCrowd,
     setVariant: (name) => {
       if (!VARIANTS[name] || name === currentVariant) return;
       currentVariant = name;
@@ -1863,6 +1885,7 @@ async function boot({ scene, camera, renderer }) {
     get kickSteps() { return KICK_STEPS; },
     set kickSteps(v) { KICK_STEPS = v; },
     get recovery() { return recovery?.state ?? null; },
+    get crowd() { return crowd; },
     // Debug shove for fall-recovery testing: an instantaneous trunk
     // velocity kick (free-joint dofs are qvel[0..5]).
     debugPush: (vx = 0, vy = 0, vz = 0, wx = 0, wy = 0, wz = 0) => {

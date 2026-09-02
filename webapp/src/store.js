@@ -36,6 +36,7 @@ export const useGame = create(
     telemetry: { fps: 0, ctrlHz: 0, speed: 0, odo: 0, peers: 0 },
     // Music / beat-dance dock
     dance: { state: "idle", title: "", bpm: 0, driveBpm: 0, note: null },
+    crowdCount: 6, // backup dancers while music plays (0-12)
   })),
 );
 

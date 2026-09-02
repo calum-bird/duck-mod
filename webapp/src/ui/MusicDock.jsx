@@ -10,8 +10,23 @@ import { MONO, ORANGE } from "../theme.js";
 
 const GLASS = "rgba(8, 8, 12, 0.72)";
 
+const stepBtn = {
+  fontFamily: MONO,
+  fontSize: 12,
+  lineHeight: 1,
+  color: ORANGE,
+  background: "transparent",
+  border: "1px solid rgba(255,122,47,0.5)",
+  borderRadius: 1,
+  px: 0.7,
+  py: 0.2,
+  cursor: "pointer",
+  "&:hover": { background: "rgba(255,122,47,0.15)" },
+};
+
 export default function MusicDock() {
   const dance = useGame((s) => s.dance);
+  const crowdCount = useGame((s) => s.crowdCount);
   const bootDone = useGame((s) => s.bootDone);
   const entered = useGame((s) => s.entered);
   const fileRef = useRef(null);
@@ -97,6 +112,14 @@ export default function MusicDock() {
       )}
       {dance.note && (
         <Box sx={{ mt: 0.5, color: "rgba(255,200,120,0.8)" }}>{dance.note}</Box>
+      )}
+      {playing && (
+        <Box sx={{ mt: 0.5, display: "flex", alignItems: "center", gap: 0.8, color: "rgba(255,255,255,0.55)" }}>
+          <span>CROWD</span>
+          <Box component="button" sx={stepBtn} onClick={() => gameApi.setCrowd?.(crowdCount - 1)}>−</Box>
+          <Box sx={{ minWidth: 16, textAlign: "center", color: ORANGE }}>{crowdCount}</Box>
+          <Box component="button" sx={stepBtn} onClick={() => gameApi.setCrowd?.(crowdCount + 1)}>+</Box>
+        </Box>
       )}
       {playing && (
         <Box sx={{ mt: 0.5, color: "rgba(255,255,255,0.4)" }}>
