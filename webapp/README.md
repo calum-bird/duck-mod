@@ -11,6 +11,15 @@ npm install
 npm run dev     # open the printed localhost URL
 ```
 
+With **bun**, force bun's own runtime — `bun run dev` alone follows Vite's
+`node` shebang to your system Node, and Vite 8's rolldown needs Node ≥ 20.12
+(`util.styleText`), which older Nodes lack:
+
+```bash
+bun install
+bun --bun run dev
+```
+
 Click **♪ PLAY A SONG** (bottom-left) and pick an mp3/wav/m4a/ogg. The app:
 
 1. decodes it with WebAudio and measures its tempo + first downbeat
